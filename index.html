@@ -1,0 +1,655 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a1020">
+<meta name="color-scheme" content="dark light">
+<script>
+  /* apply the saved theme before first paint (no flash) */
+  (function () {
+    var t = 'dark';
+    try { t = (JSON.parse(localStorage.getItem('tokenify.settings') || '{}').theme) || 'dark'; } catch (e) { /* storage blocked */ }
+    if (t === 'system') t = (window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', t === 'light' ? 'light' : 'dark');
+  })();
+</script>
+<title>TOKENIFY | Pirate Chest Simulator</title>
+<meta name="description" content="TOKENIFY — open pirate chests with exact drop odds, analyse Pirate Token probabilities in the Probability Lab, and track real chest openings live.">
+<link rel="icon" href="assets/brand/compass.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/brand/icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Barlow+Condensed:ital,wght@0,500;0,600;0,700;0,800;1,700;1,800&family=Barlow:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/animations.css">
+<link rel="stylesheet" href="css/open-chests.css">
+<link rel="stylesheet" href="css/lab.css">
+<link rel="stylesheet" href="css/tracker.css">
+<link rel="stylesheet" href="css/collection.css">
+<link rel="stylesheet" href="css/theme-light.css">
+<link rel="stylesheet" href="css/responsive.css">
+</head>
+<body class="booting">
+<a class="skip-link" href="#main">Skip to content</a>
+<div id="sr-status" class="sr-only" aria-live="polite"></div>
+<div id="sr-alert" class="sr-only" aria-live="assertive"></div>
+
+<!-- UI icon sprite -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-chest" viewBox="0 0 24 24"><path fill="currentColor" d="M4 10h16v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zm8-7c5 0 8 2.6 8 6v.5H4V9c0-3.4 3-6 8-6zm-1.5 9h3v3.5h-3z"/></symbol>
+  <symbol id="i-flask" viewBox="0 0 24 24"><path fill="currentColor" d="M9 2h6v2h-1v5.2l5.6 9.4A2.2 2.2 0 0 1 17.7 22H6.3a2.2 2.2 0 0 1-1.9-3.4L10 9.2V4H9zm-.6 13-2 3.5h11.2l-2-3.5z"/></symbol>
+  <symbol id="i-timer" viewBox="0 0 24 24"><path fill="currentColor" d="M9 1h6v2H9zm3 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zm0 2.2a6.8 6.8 0 1 0 0 13.6 6.8 6.8 0 0 0 0-13.6zM11 8h2v5l3.2 1.9-1 1.7L11 14z"/></symbol>
+  <symbol id="i-trophy" viewBox="0 0 24 24"><path fill="currentColor" d="M6 2h12v2h4v3a5 5 0 0 1-5 5h-.3A6 6 0 0 1 13 15.9V18h4v4H7v-4h4v-2.1A6 6 0 0 1 7.3 12H7a5 5 0 0 1-5-5V4h4zm-2 4v1a3 3 0 0 0 2.2 2.9A6 6 0 0 1 6 8V6zm16 0h-2v2c0 .7-.1 1.3-.2 1.9A3 3 0 0 0 20 7z"/></symbol>
+  <symbol id="i-sound" viewBox="0 0 24 24"><path fill="currentColor" d="M3 9h4l5-4v14l-5-4H3zm13.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/></symbol>
+  <symbol id="i-mute" viewBox="0 0 24 24"><path fill="currentColor" d="M3 9h4l5-4v14l-5-4H3zm13.6.2 1.4-1.4 2.2 2.2 2.2-2.2 1.4 1.4L21.6 12l2.2 2.2-1.4 1.4-2.2-2.2-2.2 2.2-1.4-1.4 2.2-2.2z"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><path fill="currentColor" d="M10.3 2h3.4l.5 2.6a7.8 7.8 0 0 1 1.9 1.1l2.5-.9 1.7 2.9-2 1.7a8 8 0 0 1 0 2.2l2 1.7-1.7 2.9-2.5-.9a7.8 7.8 0 0 1-1.9 1.1l-.5 2.6h-3.4l-.5-2.6a7.8 7.8 0 0 1-1.9-1.1l-2.5.9-1.7-2.9 2-1.7a8 8 0 0 1 0-2.2l-2-1.7 1.7-2.9 2.5.9a7.8 7.8 0 0 1 1.9-1.1zM12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8z"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10zm0 12c5 0 9 2.5 9 5.5V22H3v-2.5C3 16.5 7 14 12 14z"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zm-1 8v7h2v-7zm0-4v2h2V6z"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path fill="currentColor" d="m5.6 4.2 6.4 6.4 6.4-6.4 1.4 1.4-6.4 6.4 6.4 6.4-1.4 1.4-6.4-6.4-6.4 6.4-1.4-1.4 6.4-6.4-6.4-6.4z"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path fill="currentColor" d="M7 4.5v15l12-7.5z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path fill="currentColor" d="M6 4h4v16H6zm8 0h4v16h-4z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><path fill="currentColor" d="M6 6h12v12H6z"/></symbol>
+  <symbol id="i-history" viewBox="0 0 24 24"><path fill="currentColor" d="M13 3a9 9 0 1 1-8.5 12h2.2A7 7 0 1 0 6 9.4L8.6 12H2V5.4l2.4 2.4A9 9 0 0 1 13 3zm-1 4h2v5.2l3.5 2.1-1 1.7L12 13.4z"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path fill="currentColor" d="M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16l-5.7-5.7 1.4-1.4 3.3 3.3zM4 18h16v3H4z"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path fill="currentColor" d="M12 4a8 8 0 0 1 7.4 5H22l-3.5 4.5L15 9h2.2A6 6 0 1 0 18 14h2.1A8 8 0 1 1 12 4z"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 24 24"><path fill="currentColor" d="M5 2h2v1h11l-2 4 2 4H7v11H5z"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path fill="currentColor" d="M15 2 22 9l-2 1-3 3 1 5-2 2-4-4-5 5H5v-2l5-5-4-4 2-2 5 1 3-3z"/></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24"><path fill="currentColor" d="M18 2a3 3 0 1 1-2.6 4.5L8.9 10a3 3 0 0 1 0 2l6.5 3.5A3 3 0 1 1 15 17l-6.6-3.5a3 3 0 1 1 0-3L15 7a3 3 0 0 1 3-5z"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24"><path fill="currentColor" d="M7 19a5 5 0 0 1-.8-9.9A6.5 6.5 0 0 1 18.5 8 5.5 5.5 0 0 1 18 19z"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a5 5 0 0 1 5 5v3h1a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h1V7a5 5 0 0 1 5-5zm0 2a3 3 0 0 0-3 3v3h6V7a3 3 0 0 0-3-3z"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path fill="currentColor" d="M12 1.5 14.3 9.7 22.5 12l-8.2 2.3L12 22.5l-2.3-8.2L1.5 12l8.2-2.3z"/></symbol>
+</svg>
+
+<!-- loading screen -->
+<div class="loader" id="loader" aria-hidden="true">
+  <div class="loader-inner">
+    <svg class="loader-logo wordmark" viewBox="-6 -16 590 130" width="590" height="130" aria-hidden="true">
+      <use class="wm-shadow" href="#hwm-letters" transform="translate(0 5)" fill="#04070E" stroke="#04070E" stroke-width="3"/>
+      <use class="wm-fill" href="#hwm-letters" fill="url(#hwm-ivory)" stroke="#04070E" stroke-width="3" paint-order="stroke"/>
+      <image href="assets/brand/compass.svg" x="61.6" y="-16.2" width="128.8" height="128.8"/>
+    </svg>
+    <div class="loader-bar"><span id="loader-fill"></span></div>
+    <div class="loader-text" id="loader-text">Polishing the treasure&hellip;</div>
+  </div>
+</div>
+
+<div class="scene" aria-hidden="true">
+  <div class="scene-glow"></div>
+  <div class="scene-compass"></div>
+  <div class="scene-vignette"></div>
+</div>
+
+<header class="topbar" id="topbar">
+  <a class="brand" href="#open" aria-label="TOKENIFY — Open Chests">
+    <svg class="wordmark" viewBox="-6 -16 590 130" role="img" aria-label="TOKENIFY">
+      <defs>
+        <linearGradient id="hwm-ivory" x1="0" y1="0" x2="0" y2="100" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFF9EC"/><stop offset=".55" stop-color="#F6EBD2"/><stop offset="1" stop-color="#E2CFA6"/></linearGradient>
+        <linearGradient id="hwm-gold" x1="0" y1="-60" x2="0" y2="60" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFEBA8"/><stop offset=".45" stop-color="#F3C34F"/><stop offset="1" stop-color="#B8770F"/></linearGradient>
+        <linearGradient id="hwm-ring" x1="-50" y1="-50" x2="50" y2="50" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFF0B8"/><stop offset=".5" stop-color="#E9B23C"/><stop offset="1" stop-color="#9C6209"/></linearGradient>
+        <radialGradient id="hwm-gem" cx="-2.5" cy="-3" r="10" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFF4C2"/><stop offset=".35" stop-color="#FFC531"/><stop offset="1" stop-color="#D7650C"/></radialGradient>
+        <radialGradient id="hwm-disc" cx="0" cy="-12" r="50" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#1D2B47"/><stop offset="1" stop-color="#0A111F"/></radialGradient>
+        <linearGradient id="hwm-sheen" x1="-60" y1="0" x2="60" y2="0" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".5" stop-color="#fff" stop-opacity=".75"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+        <clipPath id="hwm-clip"><circle r="56"/></clipPath>
+        <g id="hwm-letters" stroke-linejoin="round">
+          <polygon points="0,0 62,0 62,24 44,24 44,100 18,100 18,24 0,24"/>
+          <polygon points="190,0 216,0 216,38 232,0 258,0 235,49 260,100 233,100 216,63 216,100 190,100"/>
+          <polygon points="269,0 323,0 323,22 295,22 295,39 319,39 319,61 295,61 295,78 323,78 323,100 269,100"/>
+          <polygon points="332,0 360,0 374,46 374,0 400,0 400,100 372,100 358,54 358,100 332,100"/>
+          <polygon points="409,0 435,0 435,100 409,100"/>
+          <polygon points="444,0 498,0 498,22 470,22 470,42 494,42 494,64 470,64 470,100 444,100"/>
+          <polygon points="506,0 533,0 541,30 549,0 576,0 554,58 554,100 528,100 528,58"/>
+        </g>
+      </defs>
+      <use class="wm-shadow" href="#hwm-letters" transform="translate(0 5)" fill="#04070E" stroke="#04070E" stroke-width="3"/>
+      <use class="wm-fill" href="#hwm-letters" fill="url(#hwm-ivory)" stroke="#04070E" stroke-width="3" paint-order="stroke"/>
+      <g transform="translate(126 50) scale(0.92)">
+        <g class="wm-compass">
+          <circle r="55" cy="5.4" fill="#04070E" opacity=".9"/>
+          <g fill="none" stroke="#2A1904" stroke-width="12.5"><path d="M 8.1 -48.8 A 49.5 49.5 0 0 1 48.8 -8.1"/><path d="M 48.8 8.1 A 49.5 49.5 0 0 1 8.1 48.8"/><path d="M -8.1 48.8 A 49.5 49.5 0 0 1 -48.8 8.1"/><path d="M -48.8 -8.1 A 49.5 49.5 0 0 1 -8.1 -48.8"/></g>
+          <g fill="none" stroke="url(#hwm-ring)" stroke-width="9"><path d="M 8.1 -48.8 A 49.5 49.5 0 0 1 48.8 -8.1"/><path d="M 48.8 8.1 A 49.5 49.5 0 0 1 8.1 48.8"/><path d="M -8.1 48.8 A 49.5 49.5 0 0 1 -48.8 8.1"/><path d="M -48.8 -8.1 A 49.5 49.5 0 0 1 -8.1 -48.8"/></g>
+          <circle r="44" fill="url(#hwm-disc)" stroke="#2A1904" stroke-width="2"/>
+          <circle r="38.5" fill="none" stroke="#E9B23C" stroke-opacity=".35" stroke-width="1.4"/>
+          <g stroke="#F3C34F" stroke-opacity=".55" stroke-width="1.6" stroke-linecap="round"><path d="M0 -38.5V-34M27.2 -27.2l-3.2 3.2M38.5 0H34M27.2 27.2l-3.2 -3.2M0 38.5V34M-27.2 27.2l3.2 -3.2M-38.5 0H-34M-27.2 -27.2l3.2 3.2"/></g>
+        </g>
+        <g class="wm-rose">
+          <g stroke="#2A1904" stroke-width="1.6" stroke-linejoin="round">
+            <path d="M0 0L23 -23L0 -9Z" fill="#FBE29A"/><path d="M0 0L23 -23L9 0Z" fill="#C98A1E"/><path d="M0 0L23 23L9 0Z" fill="#FBE29A"/><path d="M0 0L23 23L0 9Z" fill="#C98A1E"/>
+            <path d="M0 0L-23 23L0 9Z" fill="#FBE29A"/><path d="M0 0L-23 23L-9 0Z" fill="#C98A1E"/><path d="M0 0L-23 -23L-9 0Z" fill="#FBE29A"/><path d="M0 0L-23 -23L0 -9Z" fill="#C98A1E"/>
+          </g>
+          <g stroke="#2A1904" stroke-width="2" stroke-linejoin="round">
+            <path d="M0 0L0 -66L-11 -11Z" fill="#FFF3C7"/><path d="M0 0L0 -66L11 -11Z" fill="#E2A02C"/><path d="M0 0L60 0L11 -11Z" fill="#FBE29A"/><path d="M0 0L60 0L11 11Z" fill="#C98A1E"/>
+            <path d="M0 0L0 60L11 11Z" fill="#FBE29A"/><path d="M0 0L0 60L-11 11Z" fill="#C98A1E"/><path d="M0 0L-60 0L-11 11Z" fill="#FBE29A"/><path d="M0 0L-60 0L-11 -11Z" fill="#C98A1E"/>
+          </g>
+          <circle r="11" fill="url(#hwm-gold)" stroke="#2A1904" stroke-width="2"/>
+          <circle r="7" fill="url(#hwm-gem)"/>
+          <ellipse cx="-2.6" cy="-3.2" rx="2.4" ry="1.5" fill="#FFFFFF" fill-opacity=".85" transform="rotate(-30 -2.6 -3.2)"/>
+        </g>
+        <g clip-path="url(#hwm-clip)"><rect class="wm-sheen" x="-30" y="-70" width="34" height="140" fill="url(#hwm-sheen)" transform="rotate(20)"/></g>
+      </g>
+    </svg>
+    <img class="brand-mark" src="assets/brand/compass.svg" alt="" width="40" height="40">
+  </a>
+  <nav class="tabs" role="tablist" aria-label="Main sections">
+    <button class="tab" role="tab" id="tab-open" data-view="open" aria-controls="view-open" aria-selected="true"><svg class="i"><use href="#i-chest"/></svg><span>Open Chests</span></button>
+    <button class="tab" role="tab" id="tab-lab" data-view="lab" aria-controls="view-lab" aria-selected="false" tabindex="-1"><svg class="i"><use href="#i-flask"/></svg><span>Probability Lab</span></button>
+    <button class="tab" role="tab" id="tab-tracker" data-view="tracker" aria-controls="view-tracker" aria-selected="false" tabindex="-1"><svg class="i"><use href="#i-timer"/></svg><span>Live Tracker</span></button>
+    <button class="tab" role="tab" id="tab-collection" data-view="collection" aria-controls="view-collection" aria-selected="false" tabindex="-1"><svg class="i"><use href="#i-trophy"/></svg><span>Collection</span></button>
+  </nav>
+  <div class="topbar-actions">
+    <button class="icon-btn" id="btn-sound" type="button" aria-pressed="true" title="Sound"><svg class="i i-on"><use href="#i-sound"/></svg><svg class="i i-off"><use href="#i-mute"/></svg><span class="sr-only">Sound</span></button>
+    <button class="icon-btn" id="btn-account" type="button" title="Account"><svg class="i"><use href="#i-user"/></svg><span class="sync-dot" id="sync-dot"></span><span class="sr-only">Account and sync</span></button>
+    <button class="icon-btn" id="btn-settings" type="button" title="Settings"><svg class="i"><use href="#i-gear"/></svg><span class="sr-only">Settings</span></button>
+  </div>
+</header>
+
+<main id="main" tabindex="-1">
+
+<!-- ======================= OPEN CHESTS ======================= -->
+<section class="view view-open" id="view-open" role="tabpanel" aria-labelledby="tab-open">
+  <div class="oc-statbar" aria-label="Your chest openings">
+    <div class="ocs"><span class="ocs-l">Chests opened</span><span class="ocs-v num" id="oc-total">0</span></div>
+    <div class="ocs ocs-token"><img src="assets/tokens/pirate-token-160.png" alt="" width="40" height="40"><span class="ocs-l">Pirate Tokens</span><span class="ocs-v num" id="oc-tokens">0</span></div>
+    <div class="ocs ocs-gold"><img src="assets/rewards/gold-outfit.svg" alt="" width="40" height="40"><span class="ocs-l">Gold Outfits</span><span class="ocs-v num" id="oc-golds">0</span></div>
+    <div class="ocs ocs-rarest"><span class="ocs-l">Rarest find</span><span class="ocs-v" id="oc-rarest">&mdash;</span></div>
+  </div>
+
+  <div class="oc-stage" id="oc-stage">
+    <div class="stage-sky"></div>
+    <div class="stage-rays" id="stage-rays"></div>
+    <div class="stage-floor"></div>
+    <div class="stage-dust" id="stage-dust"></div>
+    <div class="chest-wrap" id="chest-wrap">
+      <div class="chest-shadow"></div>
+      <div class="chest-aura" id="chest-aura"></div>
+      <button class="chest" id="chest" type="button" aria-label="Open a chest" aria-describedby="oc-hint">
+        <span class="chest-frames" id="chest-frames"></span>
+        <span class="chest-shine" id="chest-shine"></span>
+        <span class="glint glint-blue"></span><span class="glint glint-orb-l"></span><span class="glint glint-orb-r"></span>
+      </button>
+    </div>
+    <canvas class="stage-fx" id="stage-fx" aria-hidden="true"></canvas>
+    <div class="stage-dim" id="stage-dim"></div>
+    <div class="stage-flash" id="stage-flash"></div>
+    <div class="reveal" id="reveal" aria-live="polite"></div>
+    <div class="multi" id="multi" hidden></div>
+    <button class="skip-btn" id="skip-btn" type="button" hidden>Skip &raquo;</button>
+  </div>
+
+  <div class="oc-controls">
+    <div class="seg" role="radiogroup" aria-label="Chests per opening" id="open-count">
+      <button type="button" role="radio" aria-checked="true" data-count="1">&times;1</button>
+      <button type="button" role="radio" aria-checked="false" data-count="10">&times;10</button>
+      <button type="button" role="radio" aria-checked="false" data-count="100">&times;100</button>
+    </div>
+    <button class="btn-gold btn-xl btn-open" id="btn-open" type="button"><span id="btn-open-label">Open Chest</span></button>
+    <p class="oc-hint" id="oc-hint">Click the chest or press <kbd>Enter</kbd>. Every chest is an independent draw from the exact drop table.</p>
+  </div>
+
+  <div class="oc-lower">
+    <section class="panel oc-latest" aria-labelledby="oc-latest-h">
+      <h2 class="panel-title" id="oc-latest-h">Latest reward</h2>
+      <div id="oc-latest" class="latest-empty">Your first reward will appear here.</div>
+    </section>
+    <section class="panel oc-history" aria-labelledby="oc-history-h">
+      <div class="panel-head">
+        <h2 class="panel-title" id="oc-history-h">Recent openings</h2>
+        <div class="chips" id="oc-filter" role="group" aria-label="Filter by rarity">
+          <button type="button" class="chip on" data-filter="all" aria-pressed="true">All</button>
+          <button type="button" class="chip" data-filter="special" aria-pressed="false">Special</button>
+          <button type="button" class="chip" data-filter="rare" aria-pressed="false">Rare+</button>
+        </div>
+      </div>
+      <ol class="history-list" id="oc-history"></ol>
+    </section>
+    <section class="panel oc-live" aria-labelledby="oc-live-h">
+      <h2 class="panel-title" id="oc-live-h">Live stats</h2>
+      <dl class="kv">
+        <div><dt>Gizmos found</dt><dd class="num" id="ls-gizmos">0</dd></div>
+        <div><dt>Most common special</dt><dd id="ls-common">&mdash;</dd></div>
+        <div><dt>Since last Pirate Token</dt><dd class="num" id="ls-since-token">&mdash;</dd></div>
+        <div><dt>Since last Gold Outfit</dt><dd class="num" id="ls-since-gold">&mdash;</dd></div>
+        <div><dt>Special drops</dt><dd class="num" id="ls-special">0</dd></div>
+      </dl>
+      <p class="fine">Droughts are history, not destiny: the next chest is still exactly 1 in 137,500 for a Pirate Token.</p>
+    </section>
+  </div>
+</section>
+
+<!-- ======================= PROBABILITY LAB ======================= -->
+<section class="view view-lab" id="view-lab" role="tabpanel" aria-labelledby="tab-lab" hidden>
+  <div class="lab-hero lux">
+    <div class="lab-hero-copy">
+      <span class="eyebrow">Probability Lab</span>
+      <h1 class="lab-title">How many Pirate Tokens would you really find?</h1>
+      <p class="lab-sub">Each chest is an independent <b>1 in 137,500</b> chance. Run genuine random simulations, then compare them with the exact binomial maths.</p>
+    </div>
+    <form class="sim-form" id="sim-form" novalidate>
+      <label class="field-label" for="lab-n">Number of chests to simulate</label>
+      <div class="big-input-row">
+        <div class="big-input-wrap">
+          <input class="big-input num" id="lab-n" inputmode="numeric" autocomplete="off" spellcheck="false" value="1,000,000" aria-describedby="lab-n-msg">
+          <span class="big-input-suffix">chests</span>
+        </div>
+        <button class="btn-gold btn-xl btn-sim" id="btn-sim" type="submit">Simulate chests</button>
+      </div>
+      <div class="presets" id="lab-presets" role="group" aria-label="Quick amounts">
+        <button type="button" class="chip" data-n="100">100</button>
+        <button type="button" class="chip" data-n="1000">1,000</button>
+        <button type="button" class="chip" data-n="10000">10,000</button>
+        <button type="button" class="chip" data-n="100000">100,000</button>
+        <button type="button" class="chip" data-n="1000000">1,000,000</button>
+        <button type="button" class="chip" data-n="10000000">10,000,000</button>
+      </div>
+      <div class="lab-mode">
+        <div class="seg" role="radiogroup" aria-label="Simulation mode" id="lab-mode">
+          <button type="button" role="radio" aria-checked="true" data-mode="fast">Token simulation <small>fast</small></button>
+          <button type="button" role="radio" aria-checked="false" data-mode="full">Full loot simulation</button>
+        </div>
+        <p class="lab-msg" id="lab-n-msg" aria-live="polite"></p>
+      </div>
+    </form>
+    <div class="sim-progress" id="sim-progress" hidden>
+      <div class="progress"><span id="sim-bar"></span></div>
+      <div class="sim-progress-row">
+        <span id="sim-pct" class="num">0%</span>
+        <span id="sim-count" class="num"></span>
+        <button class="btn-ghost" id="sim-cancel" type="button">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="lab-grid">
+    <article class="panel result-panel" id="result-panel" aria-labelledby="result-h">
+      <div class="panel-head">
+        <h2 class="panel-title" id="result-h">Simulation result</h2>
+        <span class="tag tag-sim">Simulated</span>
+      </div>
+      <div class="result-empty" id="result-empty">
+        <img src="assets/tokens/pirate-token.webp" alt="" width="120" height="120">
+        <p>Run a simulation to draw real random chests. Each run is fresh and independent &mdash; results are never scripted to match the average.</p>
+      </div>
+      <div class="result-body" id="result-body" hidden>
+        <div class="result-hero">
+          <div class="result-token"><img src="assets/tokens/pirate-token.webp" alt="Pirate Token" width="200" height="200"></div>
+          <div class="result-main">
+            <div class="result-count num" id="res-tokens">0</div>
+            <div class="result-label" id="res-tokens-label">Pirate Tokens found</div>
+            <div class="result-of">in <b class="num" id="res-n">0</b> chests simulated <span class="muted" id="res-time"></span></div>
+          </div>
+        </div>
+        <dl class="result-stats">
+          <div><dt>Expected tokens <span class="tag tag-theory sm">Theory</span></dt><dd class="num" id="res-expected">&mdash;</dd></div>
+          <div><dt>Difference from expected</dt><dd class="num" id="res-diff">&mdash;</dd></div>
+          <div><dt>Chance of exactly this many</dt><dd class="num" id="res-exact">&mdash;</dd></div>
+          <div><dt>Chance of at least one <span class="tag tag-theory sm">Theory</span></dt><dd class="num" id="res-atleast">&mdash;</dd></div>
+          <div id="res-gold-row" hidden><dt>Gold Outfits found</dt><dd class="num" id="res-gold">&mdash;</dd></div>
+        </dl>
+        <div class="full-table-wrap" id="full-table-wrap" hidden>
+          <table class="data-table" id="full-table"><caption class="sr-only">Every reward in the full loot simulation</caption>
+            <thead><tr><th scope="col">Reward</th><th scope="col">Odds</th><th scope="col">Simulated</th><th scope="col">Expected</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div class="result-actions">
+          <button class="btn-gold" id="res-again" type="button"><svg class="i"><use href="#i-refresh"/></svg>Simulate again</button>
+          <button class="btn-ghost" id="res-pin" type="button"><svg class="i"><use href="#i-pin"/></svg>Compare</button>
+          <button class="btn-ghost" id="res-share" type="button"><svg class="i"><use href="#i-share"/></svg>Result card</button>
+        </div>
+        <div class="compare" id="compare" hidden></div>
+      </div>
+    </article>
+
+    <article class="panel unusual-panel" id="unusual-panel" aria-labelledby="unusual-h" hidden>
+      <div class="panel-head"><h2 class="panel-title" id="unusual-h">How unusual was your result?</h2></div>
+      <p class="unusual-verdict" id="unusual-verdict"></p>
+      <div class="gauge" id="unusual-gauge" aria-hidden="true"><div class="gauge-track"><span class="gauge-mark" id="gauge-mark"></span></div><div class="gauge-labels"><span>Unlucky</span><span>Typical</span><span>Lucky</span></div></div>
+      <dl class="kv kv-2">
+        <div><dt>Exactly <span class="k-ref"></span> tokens</dt><dd class="num" id="un-exact"></dd></div>
+        <div><dt>At least <span class="k-ref"></span> tokens</dt><dd class="num" id="un-atleast"></dd></div>
+        <div><dt>At most <span class="k-ref"></span> tokens</dt><dd class="num" id="un-atmost"></dd></div>
+        <div><dt>Deviation from expected</dt><dd class="num" id="un-dev"></dd></div>
+        <div><dt>Standard score</dt><dd class="num" id="un-z"></dd></div>
+        <div><dt>Percentile of runs</dt><dd class="num" id="un-pct"></dd></div>
+      </dl>
+    </article>
+
+    <article class="panel chances-panel" aria-labelledby="chances-h">
+      <div class="panel-head">
+        <h2 class="panel-title" id="chances-h">Your chances</h2>
+        <span class="tag tag-theory">Theoretical</span>
+      </div>
+      <p class="panel-sub">Exact binomial maths for <b class="num" id="ch-n">1,000,000</b> chests &mdash; updates as you type.</p>
+      <div class="chance-cards" id="chance-cards">
+        <div class="cc cc-hero"><span class="cc-l">Expected Pirate Tokens</span><span class="cc-v num" id="cc-expected">&mdash;</span><span class="cc-s" id="cc-expected-s"></span></div>
+        <div class="cc"><span class="cc-l">At least one token</span><span class="cc-v num" id="cc-one">&mdash;</span><span class="cc-s" id="cc-one-s"></span></div>
+        <div class="cc"><span class="cc-l">Zero tokens</span><span class="cc-v num" id="cc-zero">&mdash;</span><span class="cc-s" id="cc-zero-s"></span></div>
+        <div class="cc"><span class="cc-l">At least two</span><span class="cc-v num" id="cc-two">&mdash;</span><span class="cc-s" id="cc-two-s"></span></div>
+        <div class="cc"><span class="cc-l">At least five</span><span class="cc-v num" id="cc-five">&mdash;</span><span class="cc-s" id="cc-five-s"></span></div>
+        <div class="cc cc-gold"><span class="cc-l">Expected Gold Outfits</span><span class="cc-v num" id="cc-gold">&mdash;</span><span class="cc-s" id="cc-gold-s"></span></div>
+      </div>
+      <div class="aim">
+        <label class="field-label" for="aim-k">How many tokens are you aiming for?</label>
+        <div class="aim-row">
+          <div class="stepper"><button type="button" class="step-btn" data-step="-1" aria-label="Fewer tokens">&minus;</button><input id="aim-k" class="num" inputmode="numeric" value="3" aria-describedby="aim-msg"><button type="button" class="step-btn" data-step="1" aria-label="More tokens">+</button></div>
+          <dl class="aim-out">
+            <div><dt>Exactly</dt><dd class="num" id="aim-exact"></dd></div>
+            <div><dt>At least</dt><dd class="num" id="aim-atleast"></dd></div>
+            <div><dt>Fewer than</dt><dd class="num" id="aim-fewer"></dd></div>
+            <div><dt>More than</dt><dd class="num" id="aim-more"></dd></div>
+          </dl>
+        </div>
+        <p class="lab-msg" id="aim-msg"></p>
+      </div>
+      <div class="interval">
+        <span class="field-label">Chance of landing between</span>
+        <div class="interval-row">
+          <input id="iv-a" class="num" inputmode="numeric" value="3" aria-label="Minimum tokens"><span>and</span><input id="iv-b" class="num" inputmode="numeric" value="8" aria-label="Maximum tokens"><span>tokens</span>
+          <output class="interval-out num" id="iv-out" for="iv-a iv-b"></output>
+        </div>
+      </div>
+    </article>
+
+    <article class="panel dist-panel" aria-labelledby="dist-h">
+      <div class="panel-head">
+        <h2 class="panel-title" id="dist-h">Probability distribution</h2>
+        <div class="chips" role="group" aria-label="Chart options">
+          <button type="button" class="chip" id="dist-tails" aria-pressed="false">Show rare tails</button>
+          <button type="button" class="chip" id="dist-log" aria-pressed="false">Log scale</button>
+        </div>
+      </div>
+      <p class="panel-sub" id="dist-sub">Tokens found (horizontal) versus the exact probability of that count (vertical).</p>
+      <div class="chart-wrap" id="dist-wrap">
+        <canvas id="dist-canvas" role="img" aria-describedby="dist-summary"></canvas>
+        <div class="chart-tip" id="dist-tip" hidden></div>
+      </div>
+      <div class="legend" id="dist-legend">
+        <span class="lg lg-bar">Theoretical probability</span>
+        <span class="lg lg-iv">Selected range</span>
+        <span class="lg lg-mean">Expected</span>
+        <span class="lg lg-obs">Your simulation</span>
+      </div>
+      <p class="sr-only" id="dist-summary"></p>
+    </article>
+
+    <article class="panel ranges-panel" aria-labelledby="ranges-h">
+      <div class="panel-head"><h2 class="panel-title" id="ranges-h">Expected result ranges</h2><span class="tag tag-theory">Theoretical</span></div>
+      <div class="chips" id="range-chips" role="radiogroup" aria-label="Central probability">
+        <button type="button" class="chip" role="radio" aria-checked="false" data-c="50">50%</button>
+        <button type="button" class="chip" role="radio" aria-checked="false" data-c="80">80%</button>
+        <button type="button" class="chip" role="radio" aria-checked="false" data-c="90">90%</button>
+        <button type="button" class="chip on" role="radio" aria-checked="true" data-c="95">95%</button>
+        <button type="button" class="chip" role="radio" aria-checked="false" data-c="99">99%</button>
+        <label class="chip chip-input"><input id="range-custom" inputmode="decimal" placeholder="Custom" aria-label="Custom percentage">%</label>
+      </div>
+      <div class="range-viz" id="range-viz" aria-hidden="true"><div class="rv-track"><span class="rv-band" id="rv-band"></span><span class="rv-mean" id="rv-mean"></span><span class="rv-obs" id="rv-obs" hidden></span></div><div class="rv-labels"><span id="rv-lo"></span><span id="rv-hi"></span></div></div>
+      <p class="range-text" id="range-text"></p>
+      <p class="fine" id="range-fine"></p>
+    </article>
+
+    <article class="panel reverse-panel" aria-labelledby="reverse-h">
+      <div class="panel-head"><h2 class="panel-title" id="reverse-h">How many chests do I need?</h2><span class="tag tag-theory">Theoretical</span></div>
+      <div class="reverse-controls">
+        <div>
+          <span class="field-label">Chance I want</span>
+          <div class="chips" id="rev-chips" role="radiogroup" aria-label="Target probability">
+            <button type="button" class="chip" role="radio" aria-checked="false" data-q="10">10%</button>
+            <button type="button" class="chip" role="radio" aria-checked="false" data-q="25">25%</button>
+            <button type="button" class="chip on" role="radio" aria-checked="true" data-q="50">50%</button>
+            <button type="button" class="chip" role="radio" aria-checked="false" data-q="75">75%</button>
+            <button type="button" class="chip" role="radio" aria-checked="false" data-q="90">90%</button>
+            <button type="button" class="chip" role="radio" aria-checked="false" data-q="95">95%</button>
+            <button type="button" class="chip" role="radio" aria-checked="false" data-q="99">99%</button>
+            <button type="button" class="chip" role="radio" aria-checked="false" data-q="99.9">99.9%</button>
+            <label class="chip chip-input"><input id="rev-custom" inputmode="decimal" placeholder="Custom" aria-label="Custom target percentage">%</label>
+          </div>
+        </div>
+        <div>
+          <label class="field-label" for="rev-k">Tokens wanted</label>
+          <div class="stepper"><button type="button" class="step-btn" data-step="-1" aria-label="Fewer">&minus;</button><input id="rev-k" class="num" inputmode="numeric" value="1"><button type="button" class="step-btn" data-step="1" aria-label="More">+</button></div>
+        </div>
+      </div>
+      <div class="reverse-answer" aria-live="polite">
+        <span class="ra-v num" id="rev-n">&mdash;</span>
+        <span class="ra-l" id="rev-l">chests</span>
+        <span class="ra-s" id="rev-s"></span>
+      </div>
+      <p class="fine" id="rev-verify"></p>
+      <p class="note-strong">Even a 99.9% chance is not a guarantee. These are probabilities, not promises.</p>
+    </article>
+
+    <details class="panel adv" id="mc-panel">
+      <summary><span class="adv-title">Repeat the experiment</span><span class="adv-sub">Monte Carlo: many independent runs, compared with the binomial prediction</span></summary>
+      <div class="adv-body">
+        <div class="mc-form">
+          <label><span class="field-label">Chests per experiment</span><input id="mc-n" class="num" inputmode="numeric" value="100,000"></label>
+          <label><span class="field-label">Number of experiments</span><input id="mc-e" class="num" inputmode="numeric" value="1,000"></label>
+          <button class="btn-gold" id="mc-run" type="button">Run experiments</button>
+        </div>
+        <p class="lab-msg" id="mc-msg"></p>
+        <div class="sim-progress" id="mc-progress" hidden><div class="progress"><span id="mc-bar"></span></div><div class="sim-progress-row"><span id="mc-pct" class="num">0%</span><span id="mc-count" class="num"></span><button class="btn-ghost" id="mc-cancel" type="button">Cancel</button></div></div>
+        <div class="mc-results" id="mc-results" hidden>
+          <dl class="kv kv-3" id="mc-stats"></dl>
+          <div class="chart-wrap chart-sm"><canvas id="mc-canvas" role="img" aria-describedby="mc-summary"></canvas><div class="chart-tip" id="mc-tip" hidden></div></div>
+          <div class="legend"><span class="lg lg-bar">Simulated experiments</span><span class="lg lg-dot">Binomial prediction</span></div>
+          <p class="sr-only" id="mc-summary"></p>
+        </div>
+      </div>
+    </details>
+
+    <details class="panel adv" id="explorer-panel">
+      <summary><span class="adv-title">Explore all reward odds</span><span class="adv-sub">The same engine, for any reward in the chest</span></summary>
+      <div class="adv-body">
+        <div class="ex-picker" id="ex-picker" role="radiogroup" aria-label="Reward"></div>
+        <div class="ex-grid">
+          <div class="ex-card ex-hero"><img id="ex-art" alt="" width="96" height="96"><div><div class="ex-name" id="ex-name"></div><div class="ex-odds" id="ex-odds"></div></div></div>
+          <dl class="kv kv-2" id="ex-stats"></dl>
+          <div class="ex-row">
+            <label><span class="field-label">At least</span><input id="ex-k" class="num" inputmode="numeric" value="2"></label>
+            <output class="num" id="ex-k-out"></output>
+            <label><span class="field-label">Target chance</span><input id="ex-q" class="num" inputmode="decimal" value="90"></label>
+            <output class="num" id="ex-q-out"></output>
+          </div>
+          <div class="chart-wrap chart-sm"><canvas id="ex-canvas" role="img" aria-describedby="ex-summary"></canvas></div>
+          <p class="sr-only" id="ex-summary"></p>
+        </div>
+      </div>
+    </details>
+
+    <details class="panel adv" id="precision-panel">
+      <summary><span class="adv-title">Advanced precision</span><span class="adv-sub">Display precision, number formats and the exact formulas behind every value</span></summary>
+      <div class="adv-body">
+        <div class="prec-controls">
+          <div><span class="field-label">Precision</span>
+            <div class="seg" role="radiogroup" id="prec-mode" aria-label="Precision">
+              <button type="button" role="radio" aria-checked="true" data-prec="standard">Standard</button>
+              <button type="button" role="radio" aria-checked="false" data-prec="detailed">Detailed</button>
+              <button type="button" role="radio" aria-checked="false" data-prec="scientific">Scientific</button>
+              <button type="button" role="radio" aria-checked="false" data-prec="high">High precision</button>
+            </div>
+          </div>
+          <div><span class="field-label">Show probabilities as</span>
+            <div class="seg" role="radiogroup" id="prec-format" aria-label="Number format">
+              <button type="button" role="radio" aria-checked="true" data-fmt="percent">Percent</button>
+              <button type="button" role="radio" aria-checked="false" data-fmt="decimal">Decimal</button>
+              <button type="button" role="radio" aria-checked="false" data-fmt="sci">Scientific</button>
+              <button type="button" role="radio" aria-checked="false" data-fmt="oneIn">1 in N</button>
+            </div>
+          </div>
+        </div>
+        <p class="fine" id="prec-note"></p>
+        <div class="inspector" id="inspector"></div>
+        <div class="selfcheck" id="selfcheck"></div>
+      </div>
+    </details>
+
+    <details class="panel adv" id="history-panel">
+      <summary><span class="adv-title">Laboratory history</span><span class="adv-sub">Saved runs, kept separate from your interactive collection</span></summary>
+      <div class="adv-body">
+        <div class="lh-actions"><button class="btn-ghost" id="lh-export" type="button"><svg class="i"><use href="#i-download"/></svg>Export runs (CSV)</button><button class="btn-ghost" id="lh-export-dist" type="button"><svg class="i"><use href="#i-download"/></svg>Export distribution (CSV)</button><button class="btn-ghost danger" id="lh-clear" type="button">Clear laboratory history</button></div>
+        <ol class="lab-history" id="lab-history"></ol>
+      </div>
+    </details>
+
+    <details class="panel adv" id="learn-panel">
+      <summary><span class="adv-title">Learn the maths</span><span class="adv-sub">Short, plain-language explanations</span></summary>
+      <div class="adv-body learn">
+        <details><summary>What does &ldquo;1 in 137,500&rdquo; mean?</summary><p>Every chest has the same tiny probability, 1/137,500 (about 0.000727%), of containing a Pirate Token. It describes one chest; it does not mean a token is scheduled to appear every 137,500 chests.</p></details>
+        <details><summary>Why doesn&rsquo;t opening 137,500 chests guarantee a token?</summary><p>Each chest is independent. Across 137,500 chests the chance of at least one token is 1 &minus; (137,499/137,500)<sup>137,500</sup> &asymp; 63.2%. About 36.8% of players who open exactly that many would still have none.</p></details>
+        <details><summary>Expected value is an average, not a promise</summary><p>The expected number of tokens is n/137,500. It is the long-run average over many players or many repeats, and it is usually not a whole number. Any single run can land above or below it.</p></details>
+        <details><summary>How the chance grows with more chests</summary><p>The chance of at least one token after n chests is 1 &minus; (1 &minus; p)<sup>n</sup>. It rises quickly at first and then flattens out, approaching but never reaching 100%.</p></details>
+        <details><summary>Long losing streaks don&rsquo;t make a token &ldquo;due&rdquo;</summary><p>Chests have no memory. After 100,000 empty chests the next one is still exactly 1 in 137,500, and the expected wait for the next token is still 137,500 chests. Believing otherwise is the gambler&rsquo;s fallacy.</p></details>
+        <details><summary>How the binomial distribution works</summary><p>If you open n independent chests, each with probability p, the number of tokens X follows Binomial(n, p): P(X = k) = C(n, k) &middot; p<sup>k</sup> &middot; (1 &minus; p)<sup>n&minus;k</sup>. The chart above plots exactly this.</p></details>
+        <details><summary>What a prediction interval means</summary><p>A central 95% range is a span of token counts that about 95% of independent runs would land inside. Because counts are whole numbers, the actual coverage is usually a little higher than the target. It is not a confidence interval: the drop rate is already known.</p></details>
+        <details><summary>Why simulated results bounce around the average</summary><p>Randomness creates spread. The typical distance from the expected count (the standard deviation) is &radic;(np(1 &minus; p)), so bigger runs land closer to the average in relative terms, but not in absolute terms.</p></details>
+        <details><summary>Exact odds versus rounded percentages</summary><p>TOKENIFY never computes with rounded figures like &ldquo;0.00073%&rdquo;. It uses the exact fraction 1/137,500 and numerically stable methods, and tells you when a value is below what can be displayed at the chosen precision.</p></details>
+        <details><summary>Why two simulations of the same size differ</summary><p>Each simulation is a fresh set of independent random draws. Two runs of a million chests can easily differ by several tokens; that variation is exactly what the distribution chart predicts.</p></details>
+      </div>
+    </details>
+  </div>
+</section>
+
+<!-- ======================= LIVE TRACKER ======================= -->
+<section class="view view-tracker" id="view-tracker" role="tabpanel" aria-labelledby="tab-tracker" hidden>
+  <div class="trk" id="trk" tabindex="-1">
+    <div class="trk-top">
+      <div class="trk-status" id="trk-status" data-state="none">
+        <span class="trk-dot" aria-hidden="true"></span>
+        <span class="trk-status-text" id="trk-status-text">No session</span>
+        <span class="trk-session-no" id="trk-session-no"></span>
+      </div>
+      <div class="trk-top-actions">
+        <span class="trk-saved" id="trk-saved" aria-live="polite"></span>
+        <button class="icon-btn" id="trk-settings-btn" type="button" title="Tracker settings"><svg class="i"><use href="#i-gear"/></svg><span class="sr-only">Tracker settings</span></button>
+      </div>
+    </div>
+
+    <div class="trk-banner" id="trk-banner" hidden></div>
+
+    <div class="trk-hero">
+      <div class="trk-count num" id="trk-count" aria-describedby="trk-count-label">0</div>
+      <div class="trk-count-label" id="trk-count-label">Chests this session</div>
+      <div class="trk-pad">
+        <button class="trk-btn trk-minus" id="trk-minus" type="button" aria-label="Remove one chest"><span aria-hidden="true">&minus;</span></button>
+        <button class="trk-btn trk-plus" id="trk-plus" type="button" aria-label="Add one chest"><span aria-hidden="true">+</span></button>
+      </div>
+      <div class="trk-hint" id="trk-hint">Press <kbd>Space</kbd> for every chest</div>
+    </div>
+
+    <div class="trk-game-row">
+      <div class="tm"><span class="tm-v num" id="trk-game">0</span><span class="tm-l" id="trk-game-l">Current game</span></div>
+      <div class="tm"><span class="tm-v num" id="trk-cpg-all">&mdash;</span><span class="tm-l">All-time CPG</span></div>
+      <div class="tm"><span class="tm-v num" id="trk-cpg-recent">&mdash;</span><span class="tm-l" id="trk-cpg-recent-l">Last 10 CPG</span><span class="tm-delta" id="trk-cpg-delta"></span></div>
+    </div>
+
+    <div class="trk-time-row">
+      <div class="tb"><span class="tb-v num mono" id="trk-time">00:00:00</span><span class="tb-l">Session time</span></div>
+      <div class="tb"><span class="tb-v num" id="trk-total">0</span><span class="tb-l">Total chests</span></div>
+    </div>
+
+    <div class="trk-prob-row">
+      <div class="tp"><span class="tp-l">Session token chance <button class="info-btn" type="button" data-tip="cumulative" aria-label="What does this mean?"><svg class="i"><use href="#i-info"/></svg></button></span><span class="tp-v num" id="trk-p-session">0%</span></div>
+      <div class="tp"><span class="tp-l">Overall token chance</span><span class="tp-v num" id="trk-p-overall">0%</span></div>
+    </div>
+
+    <div class="trk-eta">
+      <span class="eta-l">Estimated time to token <button class="info-btn" type="button" data-tip="eta" aria-label="How is this estimated?"><svg class="i"><use href="#i-info"/></svg></button></span>
+      <span class="eta-v" id="trk-eta">&mdash;</span>
+      <span class="eta-s" id="trk-eta-s"></span>
+    </div>
+
+    <div class="trk-actions">
+      <button class="btn-gold btn-xl trk-endgame" id="trk-endgame" type="button">End game &amp; ready next <kbd>N</kbd></button>
+      <div class="trk-session-btns">
+        <button class="btn-ghost" id="trk-start" type="button"><svg class="i"><use href="#i-play"/></svg>Start session</button>
+        <button class="btn-ghost" id="trk-pause" type="button"><svg class="i"><use href="#i-pause"/></svg>Pause</button>
+        <button class="btn-ghost" id="trk-end" type="button"><svg class="i"><use href="#i-stop"/></svg>End session</button>
+      </div>
+    </div>
+
+    <details class="trk-details" id="trk-details">
+      <summary>Details, history &amp; corrections</summary>
+      <div class="trk-details-body">
+        <div class="td-tabs" role="tablist" aria-label="Tracker details">
+          <button role="tab" class="td-tab" aria-selected="true" data-td="estimates">Estimates</button>
+          <button role="tab" class="td-tab" aria-selected="false" data-td="games" tabindex="-1">Games</button>
+          <button role="tab" class="td-tab" aria-selected="false" data-td="sessions" tabindex="-1">Sessions</button>
+          <button role="tab" class="td-tab" aria-selected="false" data-td="tokens" tabindex="-1">Token finds</button>
+          <button role="tab" class="td-tab" aria-selected="false" data-td="fix" tabindex="-1">Corrections</button>
+          <button role="tab" class="td-tab" aria-selected="false" data-td="data" tabindex="-1">Data</button>
+        </div>
+        <div class="td-pane" data-pane="estimates" role="tabpanel"></div>
+        <div class="td-pane" data-pane="games" role="tabpanel" hidden></div>
+        <div class="td-pane" data-pane="sessions" role="tabpanel" hidden></div>
+        <div class="td-pane" data-pane="tokens" role="tabpanel" hidden></div>
+        <div class="td-pane" data-pane="fix" role="tabpanel" hidden></div>
+        <div class="td-pane" data-pane="data" role="tabpanel" hidden></div>
+      </div>
+    </details>
+  </div>
+</section>
+
+<!-- ======================= COLLECTION ======================= -->
+<section class="view view-collection" id="view-collection" role="tabpanel" aria-labelledby="tab-collection" hidden>
+  <div class="col-head">
+    <div>
+      <span class="eyebrow">Collection</span>
+      <h1 class="col-title">Your treasure</h1>
+      <p class="col-sub" id="col-sub">Rewards from chests you opened yourself on the Open Chests tab.</p>
+    </div>
+    <div class="col-progress"><div class="ring" id="col-ring"><span class="num" id="col-found">0</span><small>of 11</small></div><span>discovered</span></div>
+  </div>
+  <div class="col-grid" id="col-grid"></div>
+  <div class="col-lower">
+    <section class="panel col-ordinary" aria-labelledby="col-ord-h">
+      <h2 class="panel-title" id="col-ord-h">Ordinary Loot</h2>
+      <div class="ord-row"><img src="assets/rewards/ordinary-loot.svg" alt="" width="72" height="72"><div><div class="num big-num" id="col-ord-count">0</div><div class="muted" id="col-ord-share">of your openings</div></div></div>
+      <p class="fine" id="col-ord-odds"></p>
+    </section>
+    <section class="panel col-jackpots" aria-labelledby="col-jp-h">
+      <h2 class="panel-title" id="col-jp-h">Jackpot history</h2>
+      <ol class="jackpot-list" id="col-jackpots"></ol>
+    </section>
+    <section class="panel col-stats" aria-labelledby="col-st-h">
+      <h2 class="panel-title" id="col-st-h">Observed vs expected</h2>
+      <div class="table-scroll"><table class="data-table" id="col-table"><caption class="sr-only">Your interactive openings compared with the exact expected counts</caption><thead><tr><th scope="col">Reward</th><th scope="col">Found</th><th scope="col">Expected</th><th scope="col">Odds</th></tr></thead><tbody></tbody></table></div>
+    </section>
+    <section class="panel col-lab" aria-labelledby="col-lab-h">
+      <h2 class="panel-title" id="col-lab-h">Laboratory records <span class="tag tag-sim sm">Separate</span></h2>
+      <p class="fine">Probability Lab simulations never add items to your collection. They are summarised here only for reference.</p>
+      <dl class="kv" id="col-lab-stats"></dl>
+    </section>
+  </div>
+</section>
+</main>
+
+<footer class="footer">
+  <span>TOKENIFY is an independent fan-made simulator and tracker, not affiliated with Epic Games. Odds come from the published drop table.</span>
+  <a href="tests/index.html">Run the test suite</a>
+</footer>
+
+<div class="modal-root" id="modal-root"></div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+
+<script src="js/supabase-key.js"></script>
+<script src="js/config.js"></script>
+<script src="js/util.js"></script>
+<script src="js/bigfloat.js"></script>
+<script src="js/probability-engine.js"></script>
+<script src="js/reward-engine.js"></script>
+<script src="js/sim-core.js"></script>
+<script src="js/persistence.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/particles.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/chest-animation.js"></script>
+<script src="js/open-chests.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/probability-lab.js"></script>
+<script src="js/tracker-model.js"></script>
+<script src="js/sync.js"></script>
+<script src="js/tracker-ui.js"></script>
+<script src="js/collection.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

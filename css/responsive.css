@@ -1,0 +1,66 @@
+﻿/* TOKENIFY — responsive layout */
+.reduce-motion .stage-dust { display: none; }
+
+@media (max-width: 1180px) {
+  .tab { padding: 0 11px; letter-spacing: .06em; font-size: 14px; }
+  .brand .wordmark { width: 170px; }
+  .oc-lower { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .oc-lower .oc-live { grid-column: 1 / -1; }
+}
+
+@media (max-width: 980px) {
+  .tab span { display: none; }
+  .tab { padding: 0 14px; }
+  .tab .i { width: 22px; height: 22px; }
+  .tab::after { left: 8px; right: 8px; }
+  .oc-statbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* phones and narrow panes: tabs become a bottom bar */
+@media (max-width: 720px) {
+  :root { --topbar-h: 58px; }
+  /* backdrop-filter would become the containing block for the fixed bottom tab bar */
+  .topbar { grid-template-columns: 1fr auto; gap: 8px; backdrop-filter: none; -webkit-backdrop-filter: none; background: var(--bottombar-bg); }
+  .brand .wordmark { width: 138px; }
+  .tabs {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; height: calc(64px + env(safe-area-inset-bottom)); padding: 0 6px env(safe-area-inset-bottom);
+    background: var(--bottombar-bg); border-top: 1px solid var(--line); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 0;
+  }
+  .tab { flex-direction: column; justify-content: center; gap: 4px; padding: 0 4px; font-size: 11px; letter-spacing: .06em; }
+  .tab span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .tab .i { width: 22px; height: 22px; }
+  .tab::after { top: 0; bottom: auto; height: 3px; left: 22%; right: 22%; }
+  main { padding-top: 14px; padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
+  .footer { padding-bottom: calc(90px + env(safe-area-inset-bottom)); }
+  .toasts { bottom: calc(80px + env(safe-area-inset-bottom)); }
+  .ocs { padding: 10px 12px; min-height: 62px; }
+  .ocs-v { font-size: 24px; }
+  .ocs img { width: 32px; height: 32px; }
+  .oc-stage { height: clamp(360px, 62vh, 480px); border-radius: var(--r-md); }
+  .chest-wrap { width: min(74vw, 330px); }
+  .oc-lower { grid-template-columns: 1fr; }
+  .btn-xl { min-height: 58px; font-size: 23px; padding: 0 28px; }
+  .btn-open { width: 100%; }
+  .rv-art { width: 112px; height: 112px; }
+  .rv.tier-rare .rv-art, .rv.tier-epic .rv-art { width: 128px; height: 128px; }
+  .rv-name { font-size: 24px; }
+  .grid10 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sum100 { grid-template-columns: 1fr; }
+  .multi { align-items: start; }
+  .kv-2, .kv-3 { grid-template-columns: 1fr; }
+  .form-grid { grid-template-columns: 1fr; }
+  .modal { padding: 20px 16px; }
+  .modal-title { font-size: 24px; }
+  .setting { flex-wrap: wrap; }
+  .panel { padding: 16px; }
+}
+
+@media (max-width: 380px) {
+  .tab { font-size: 10px; letter-spacing: .03em; }
+  .ocs-l { font-size: 10px; letter-spacing: .1em; }
+}
+
+@media (hover: none) {
+  .btn-gold:hover::after { background-position: -150% 0; }
+}

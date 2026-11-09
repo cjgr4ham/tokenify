@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Portable Extractor">
+  <defs>
+    <linearGradient id="pe-gold" x1="0" y1="50" x2="0" y2="116" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFE9A3"/><stop offset=".5" stop-color="#EFB741"/><stop offset="1" stop-color="#AE6B0B"/></linearGradient>
+    <linearGradient id="pe-beam" x1="0" y1="8" x2="0" y2="70" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#C9A6FF" stop-opacity="0"/><stop offset=".6" stop-color="#B38BFF" stop-opacity=".75"/><stop offset="1" stop-color="#E9DCFF" stop-opacity=".95"/></linearGradient>
+    <radialGradient id="pe-core" cx="64" cy="78" r="16" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFFFFF"/><stop offset=".35" stop-color="#D9C2FF"/><stop offset="1" stop-color="#7A3FE0"/></radialGradient>
+    <radialGradient id="pe-orb" cx="61" cy="25" r="10" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFFFFF"/><stop offset=".5" stop-color="#C7A8FF"/><stop offset="1" stop-color="#6A2FD6"/></radialGradient>
+  </defs>
+  <ellipse cx="64" cy="117" rx="40" ry="6" fill="#000" opacity=".35"/>
+  <!-- extraction beam -->
+  <path d="M48 70 L56 6 L72 6 L80 70 Z" fill="url(#pe-beam)"/>
+  <g stroke="#E9DCFF" stroke-width="2" stroke-linecap="round" opacity=".8"><path d="M58 52v-10M70 40v-8M64 64v-6"/></g>
+  <!-- floating sprite orb -->
+  <circle cx="64" cy="28" r="11" fill="url(#pe-orb)" stroke="#1B1207" stroke-width="3"/>
+  <circle cx="60" cy="24" r="3" fill="#FFFFFF" opacity=".9"/>
+  <!-- side handles -->
+  <path d="M30 72 Q16 72 16 86 Q16 98 30 98" fill="none" stroke="#1B1207" stroke-width="9" stroke-linecap="round"/>
+  <path d="M30 72 Q16 72 16 86 Q16 98 30 98" fill="none" stroke="url(#pe-gold)" stroke-width="5" stroke-linecap="round"/>
+  <path d="M98 72 Q112 72 112 86 Q112 98 98 98" fill="none" stroke="#1B1207" stroke-width="9" stroke-linecap="round"/>
+  <path d="M98 72 Q112 72 112 86 Q112 98 98 98" fill="none" stroke="url(#pe-gold)" stroke-width="5" stroke-linecap="round"/>
+  <!-- base plate -->
+  <rect x="22" y="100" width="84" height="14" rx="6" fill="#7A4A08" stroke="#1B1207" stroke-width="4"/>
+  <!-- casing -->
+  <path d="M30 104 L34 64 Q34 56 42 56 L86 56 Q94 56 94 64 L98 104 Z" fill="url(#pe-gold)" stroke="#1B1207" stroke-width="4.5" stroke-linejoin="round"/>
+  <rect x="40" y="60" width="48" height="5" rx="2.5" fill="#FFF3C9" opacity=".6"/>
+  <!-- rivets -->
+  <g fill="#8A5208"><circle cx="40" cy="96" r="2.4"/><circle cx="88" cy="96" r="2.4"/><circle cx="40" cy="70" r="2.4"/><circle cx="88" cy="70" r="2.4"/></g>
+  <!-- energy core window -->
+  <circle cx="64" cy="82" r="17" fill="#2C1258" stroke="#1B1207" stroke-width="3.5"/>
+  <circle cx="64" cy="82" r="12" fill="url(#pe-core)"/>
+  <path d="M64 70 L60 82 L66 82 L62 94" fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+  <!-- emitter lip -->
+  <rect x="46" y="50" width="36" height="10" rx="4" fill="#C98A1E" stroke="#1B1207" stroke-width="3.5"/>
+</svg>

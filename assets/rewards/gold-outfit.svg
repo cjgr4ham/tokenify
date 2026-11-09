@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Gold Outfit (placeholder artwork)">
+  <!-- TEMPORARY PLACEHOLDER — not the official skin. Replace this file with the real artwork (any 1:1 SVG/PNG). -->
+  <defs>
+    <linearGradient id="go-gold" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFF4C4"/><stop offset=".45" stop-color="#F6C54E"/><stop offset="1" stop-color="#A9670A"/></linearGradient>
+    <linearGradient id="go-gold2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFE48A"/><stop offset="1" stop-color="#C27E12"/></linearGradient>
+    <linearGradient id="go-dark" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#D99A2B"/><stop offset="1" stop-color="#7A4A08"/></linearGradient>
+    <radialGradient id="go-halo" cx="64" cy="58" r="58" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFF0A8" stop-opacity=".55"/><stop offset="1" stop-color="#FFF0A8" stop-opacity="0"/></radialGradient>
+  </defs>
+  <circle cx="64" cy="58" r="58" fill="url(#go-halo)"/>
+  <!-- coat / shoulders -->
+  <path d="M14 128 Q14 92 40 84 L52 80 L64 96 L76 80 L88 84 Q114 92 114 128 Z" fill="url(#go-gold)" stroke="#1B1207" stroke-width="4.5" stroke-linejoin="round"/>
+  <!-- epaulettes -->
+  <path d="M20 96 Q30 84 44 86 L40 98 Q30 98 22 104 Z" fill="url(#go-dark)" stroke="#1B1207" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M108 96 Q98 84 84 86 L88 98 Q98 98 106 104 Z" fill="url(#go-dark)" stroke="#1B1207" stroke-width="3" stroke-linejoin="round"/>
+  <!-- lapels and sash -->
+  <path d="M52 80 L64 96 L60 128 L46 128 L42 92 Z" fill="url(#go-gold2)" stroke="#1B1207" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M76 80 L64 96 L68 128 L82 128 L86 92 Z" fill="url(#go-gold2)" stroke="#1B1207" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M40 108 L90 122" stroke="#1B1207" stroke-width="10" stroke-linecap="round"/><path d="M40 108 L90 122" stroke="#FFE48A" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="64" cy="115" r="6" fill="#FFF4C4" stroke="#1B1207" stroke-width="2.5"/>
+  <!-- neck + head -->
+  <path d="M54 70 L54 82 Q64 90 74 82 L74 70 Z" fill="url(#go-dark)" stroke="#1B1207" stroke-width="3.5" stroke-linejoin="round"/>
+  <path d="M42 50 Q42 30 64 30 Q86 30 86 50 L86 58 Q86 78 64 80 Q42 78 42 58 Z" fill="url(#go-gold)" stroke="#1B1207" stroke-width="4.5" stroke-linejoin="round"/>
+  <!-- face shading: mask band -->
+  <path d="M44 52 Q64 46 84 52 L84 60 Q64 56 44 60 Z" fill="url(#go-dark)" stroke="#1B1207" stroke-width="2.5" stroke-linejoin="round"/>
+  <ellipse cx="55" cy="55" rx="4.5" ry="3" fill="#FFF8DA"/><ellipse cx="73" cy="55" rx="4.5" ry="3" fill="#FFF8DA"/>
+  <path d="M58 70 Q64 74 70 70" fill="none" stroke="#7A4A08" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- tricorn hat -->
+  <path d="M26 40 Q40 16 64 14 Q88 16 102 40 Q86 32 64 34 Q42 32 26 40 Z" fill="url(#go-dark)" stroke="#1B1207" stroke-width="4.5" stroke-linejoin="round"/>
+  <path d="M36 34 Q50 22 64 22 Q78 22 92 34" fill="none" stroke="#FFE48A" stroke-width="3" stroke-linecap="round"/>
+  <path d="M64 18 l3.2 6.5 7.1 1 -5.2 5 1.2 7.1 -6.3 -3.4 -6.3 3.4 1.2 -7.1 -5.2 -5 7.1 -1z" fill="#FFF4C4" stroke="#1B1207" stroke-width="2.2" stroke-linejoin="round"/>
+  <!-- sparkles -->
+  <g fill="#FFFBE6" stroke="#1B1207" stroke-width="1.5" stroke-linejoin="round">
+    <path d="M110 18l3 7 7 3-7 3-3 7-3-7-7-3 7-3z"/><path d="M16 60l2.5 5.5 5.5 2.5-5.5 2.5-2.5 5.5-2.5-5.5-5.5-2.5 5.5-2.5z"/>
+  </g>
+</svg>

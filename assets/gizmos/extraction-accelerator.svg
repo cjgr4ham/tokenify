@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Extraction Accelerator">
+  <defs>
+    <linearGradient id="ea-wood" x1="0" y1="40" x2="0" y2="112" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#C98B4F"/><stop offset="1" stop-color="#7B4A22"/></linearGradient>
+    <linearGradient id="ea-gold" x1="0" y1="30" x2="0" y2="116" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFE9A3"/><stop offset=".5" stop-color="#F0BA43"/><stop offset="1" stop-color="#B3700C"/></linearGradient>
+    <linearGradient id="ea-bolt" x1="0" y1="44" x2="0" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFF6B8"/><stop offset=".5" stop-color="#FFC233"/><stop offset="1" stop-color="#FF7A1A"/></linearGradient>
+  </defs>
+  <ellipse cx="72" cy="116" rx="40" ry="6" fill="#000" opacity=".35"/>
+  <!-- speed lines -->
+  <g stroke-linecap="round">
+    <path d="M6 54 H26" stroke="#1B1207" stroke-width="8"/><path d="M6 54 H26" stroke="#FFB347" stroke-width="4"/>
+    <path d="M2 76 H24" stroke="#1B1207" stroke-width="8"/><path d="M2 76 H24" stroke="#FFD27A" stroke-width="4"/>
+    <path d="M10 98 H28" stroke="#1B1207" stroke-width="8"/><path d="M10 98 H28" stroke="#FFB347" stroke-width="4"/>
+  </g>
+  <!-- crate -->
+  <rect x="34" y="40" width="80" height="72" rx="8" fill="url(#ea-wood)" stroke="#1B1207" stroke-width="4.5"/>
+  <g stroke="#5C3416" stroke-width="2.5" opacity=".75"><path d="M36 58 H112M36 76 H112M36 94 H112"/></g>
+  <!-- gold corner brackets -->
+  <g fill="url(#ea-gold)" stroke="#1B1207" stroke-width="3" stroke-linejoin="round">
+    <path d="M34 48 Q34 40 42 40 L56 40 L56 50 L44 50 L44 62 L34 62 Z"/>
+    <path d="M114 48 Q114 40 106 40 L92 40 L92 50 L104 50 L104 62 L114 62 Z"/>
+    <path d="M34 104 Q34 112 42 112 L56 112 L56 102 L44 102 L44 90 L34 90 Z"/>
+    <path d="M114 104 Q114 112 106 112 L92 112 L92 102 L104 102 L104 90 L114 90 Z"/>
+  </g>
+  <!-- lid band -->
+  <rect x="30" y="30" width="88" height="14" rx="5" fill="url(#ea-gold)" stroke="#1B1207" stroke-width="4"/>
+  <rect x="36" y="33" width="76" height="4" rx="2" fill="#FFF3C9" opacity=".6"/>
+  <!-- lightning emblem -->
+  <circle cx="74" cy="76" r="22" fill="#3A1D06" stroke="#1B1207" stroke-width="3"/>
+  <path d="M80 56 L64 80 L74 80 L68 98 L86 72 L76 72 Z" fill="url(#ea-bolt)" stroke="#1B1207" stroke-width="3" stroke-linejoin="round"/>
+  <!-- spark -->
+  <g fill="#FFE27A" stroke="#1B1207" stroke-width="1.5" stroke-linejoin="round"><path d="M112 14l3 7 7 3-7 3-3 7-3-7-7-3 7-3z"/></g>
+</svg>

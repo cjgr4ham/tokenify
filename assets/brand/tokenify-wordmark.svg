@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="-6 -16 590 130" width="590" height="130" role="img" aria-label="TOKENIFY">
+  <defs>
+    <linearGradient id="wm-ivory" x1="0" y1="0" x2="0" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFF9EC"/><stop offset=".55" stop-color="#F6EBD2"/><stop offset="1" stop-color="#E2CFA6"/>
+    </linearGradient>
+    <linearGradient id="wm-gold" x1="0" y1="-60" x2="0" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFEBA8"/><stop offset=".45" stop-color="#F3C34F"/><stop offset="1" stop-color="#B8770F"/>
+    </linearGradient>
+    <linearGradient id="wm-ring" x1="-50" y1="-50" x2="50" y2="50" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFF0B8"/><stop offset=".5" stop-color="#E9B23C"/><stop offset="1" stop-color="#9C6209"/>
+    </linearGradient>
+    <radialGradient id="wm-gem" cx="-2.5" cy="-3" r="10" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFF4C2"/><stop offset=".35" stop-color="#FFC531"/><stop offset="1" stop-color="#D7650C"/>
+    </radialGradient>
+    <radialGradient id="wm-disc" cx="0" cy="-12" r="50" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1D2B47"/><stop offset="1" stop-color="#0A111F"/>
+    </radialGradient>
+    <g id="wm-letters" stroke-linejoin="round">
+      <polygon points="0,0 62,0 62,24 44,24 44,100 18,100 18,24 0,24"/>
+      <polygon points="190,0 216,0 216,38 232,0 258,0 235,49 260,100 233,100 216,63 216,100 190,100"/>
+      <polygon points="269,0 323,0 323,22 295,22 295,39 319,39 319,61 295,61 295,78 323,78 323,100 269,100"/>
+      <polygon points="332,0 360,0 374,46 374,0 400,0 400,100 372,100 358,54 358,100 332,100"/>
+      <polygon points="409,0 435,0 435,100 409,100"/>
+      <polygon points="444,0 498,0 498,22 470,22 470,42 494,42 494,64 470,64 470,100 444,100"/>
+      <polygon points="506,0 533,0 541,30 549,0 576,0 554,58 554,100 528,100 528,58"/>
+    </g>
+  </defs>
+  <!-- letters: drop shadow, then ivory fill with a dark keyline -->
+  <use xlink:href="#wm-letters" href="#wm-letters" transform="translate(0 5)" fill="#04070E" stroke="#04070E" stroke-width="3"/>
+  <use xlink:href="#wm-letters" href="#wm-letters" fill="url(#wm-ivory)" stroke="#04070E" stroke-width="3" paint-order="stroke"/>
+  <!-- the compass "O" -->
+  <g transform="translate(126 50) scale(0.92)">
+    <circle r="55" cy="5.4" fill="#04070E" opacity=".9"/>
+    <g fill="none" stroke="#2A1904" stroke-width="12.5">
+      <path d="M 8.1 -48.8 A 49.5 49.5 0 0 1 48.8 -8.1"/><path d="M 48.8 8.1 A 49.5 49.5 0 0 1 8.1 48.8"/>
+      <path d="M -8.1 48.8 A 49.5 49.5 0 0 1 -48.8 8.1"/><path d="M -48.8 -8.1 A 49.5 49.5 0 0 1 -8.1 -48.8"/>
+    </g>
+    <g fill="none" stroke="url(#wm-ring)" stroke-width="9">
+      <path d="M 8.1 -48.8 A 49.5 49.5 0 0 1 48.8 -8.1"/><path d="M 48.8 8.1 A 49.5 49.5 0 0 1 8.1 48.8"/>
+      <path d="M -8.1 48.8 A 49.5 49.5 0 0 1 -48.8 8.1"/><path d="M -48.8 -8.1 A 49.5 49.5 0 0 1 -8.1 -48.8"/>
+    </g>
+    <circle r="44" fill="url(#wm-disc)" stroke="#2A1904" stroke-width="2"/>
+    <circle r="38.5" fill="none" stroke="#E9B23C" stroke-opacity=".35" stroke-width="1.4"/>
+    <g stroke="#F3C34F" stroke-opacity=".55" stroke-width="1.6" stroke-linecap="round">
+      <path d="M0 -38.5V-34M27.2 -27.2l-3.2 3.2M38.5 0H34M27.2 27.2l-3.2 -3.2M0 38.5V34M-27.2 27.2l3.2 -3.2M-38.5 0H-34M-27.2 -27.2l3.2 3.2"/>
+    </g>
+    <g stroke="#2A1904" stroke-width="1.6" stroke-linejoin="round">
+      <path d="M0 0L23 -23L0 -9Z" fill="#FBE29A"/><path d="M0 0L23 -23L9 0Z" fill="#C98A1E"/>
+      <path d="M0 0L23 23L9 0Z" fill="#FBE29A"/><path d="M0 0L23 23L0 9Z" fill="#C98A1E"/>
+      <path d="M0 0L-23 23L0 9Z" fill="#FBE29A"/><path d="M0 0L-23 23L-9 0Z" fill="#C98A1E"/>
+      <path d="M0 0L-23 -23L-9 0Z" fill="#FBE29A"/><path d="M0 0L-23 -23L0 -9Z" fill="#C98A1E"/>
+    </g>
+    <g stroke="#2A1904" stroke-width="2" stroke-linejoin="round">
+      <path d="M0 0L0 -66L-11 -11Z" fill="#FFF3C7"/><path d="M0 0L0 -66L11 -11Z" fill="#E2A02C"/>
+      <path d="M0 0L60 0L11 -11Z" fill="#FBE29A"/><path d="M0 0L60 0L11 11Z" fill="#C98A1E"/>
+      <path d="M0 0L0 60L11 11Z" fill="#FBE29A"/><path d="M0 0L0 60L-11 11Z" fill="#C98A1E"/>
+      <path d="M0 0L-60 0L-11 11Z" fill="#FBE29A"/><path d="M0 0L-60 0L-11 -11Z" fill="#C98A1E"/>
+    </g>
+    <circle r="11" fill="url(#wm-gold)" stroke="#2A1904" stroke-width="2"/>
+    <circle r="7" fill="url(#wm-gem)"/>
+    <ellipse cx="-2.6" cy="-3.2" rx="2.4" ry="1.5" fill="#FFFFFF" fill-opacity=".85" transform="rotate(-30 -2.6 -3.2)"/>
+  </g>
+</svg>

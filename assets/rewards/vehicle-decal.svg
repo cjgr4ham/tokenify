@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Vehicle and Decal">
+  <defs>
+    <linearGradient id="vd-body" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#C9A2FF"/><stop offset=".45" stop-color="#8E5BFF"/><stop offset="1" stop-color="#4E25A8"/></linearGradient>
+    <linearGradient id="vd-glass" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E8F7FF"/><stop offset="1" stop-color="#6FB8F2"/></linearGradient>
+    <linearGradient id="vd-gold" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFE9A3"/><stop offset="1" stop-color="#C98A1E"/></linearGradient>
+  </defs>
+  <ellipse cx="62" cy="112" rx="52" ry="6" fill="#000" opacity=".35"/>
+  <!-- roll cage -->
+  <path d="M38 64 L48 36 L84 36 L96 64" fill="none" stroke="#1B1207" stroke-width="9" stroke-linejoin="round"/>
+  <path d="M38 64 L48 36 L84 36 L96 64" fill="none" stroke="#3A3350" stroke-width="5" stroke-linejoin="round"/>
+  <path d="M52 40 L58 62 L88 62 L82 40 Z" fill="url(#vd-glass)" stroke="#1B1207" stroke-width="3" stroke-linejoin="round"/>
+  <!-- body -->
+  <path d="M10 82 Q10 66 26 64 L104 62 Q118 62 120 76 L120 88 Q120 94 114 94 L14 94 Q10 94 10 88 Z" fill="url(#vd-body)" stroke="#1B1207" stroke-width="4.5" stroke-linejoin="round"/>
+  <path d="M18 70 L110 68" stroke="#E6D4FF" stroke-width="3" stroke-linecap="round" opacity=".7"/>
+  <!-- decal: gold flame stripe + star -->
+  <path d="M30 86 Q46 72 62 80 Q70 70 84 76 Q90 72 98 74 Q88 84 72 86 Z" fill="url(#vd-gold)" stroke="#1B1207" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M100 78 l2.4 4.8 5.3 .8 -3.8 3.7 .9 5.2 -4.8 -2.5 -4.7 2.5 .9 -5.2 -3.8 -3.7 5.3 -.8z" fill="#FFF3B0" stroke="#1B1207" stroke-width="2"/>
+  <!-- wheels -->
+  <g stroke="#1B1207" stroke-width="4">
+    <circle cx="34" cy="96" r="16" fill="#1F1B2B"/><circle cx="96" cy="96" r="16" fill="#1F1B2B"/>
+    <circle cx="34" cy="96" r="7" fill="url(#vd-gold)" stroke-width="3"/><circle cx="96" cy="96" r="7" fill="url(#vd-gold)" stroke-width="3"/>
+  </g>
+  <g stroke="#4B4462" stroke-width="2.5" stroke-linecap="round"><path d="M22 88l4 3M46 88l-4 3M84 88l4 3M108 88l-4 3"/></g>
+  <!-- headlight -->
+  <rect x="112" y="72" width="7" height="8" rx="2" fill="#FFF1A8" stroke="#1B1207" stroke-width="2.5"/>
+  <!-- decal sticker with peeled corner -->
+  <g transform="translate(94 8) rotate(10)">
+    <path d="M0 0 H26 V18 L18 26 H0 Z" fill="#FF6FB5" stroke="#1B1207" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M26 18 L18 18 L18 26 Z" fill="#FFD1E8" stroke="#1B1207" stroke-width="2.5" stroke-linejoin="round"/>
+    <path d="M7 13 l3 -6 3 6 -3 6z" fill="#FFF3B0"/>
+  </g>
+</svg>

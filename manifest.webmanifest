@@ -1,0 +1,14 @@
+{
+  "name": "TOKENIFY | Pirate Chest Simulator",
+  "short_name": "TOKENIFY",
+  "description": "Open pirate chests with exact odds, analyse Pirate Token probabilities and track real chest openings.",
+  "start_url": "./index.html#open",
+  "display": "standalone",
+  "background_color": "#0a1120",
+  "theme_color": "#0a1020",
+  "icons": [
+    { "src": "assets/brand/compass.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "assets/brand/icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "assets/brand/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

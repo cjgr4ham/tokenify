@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Loading Screen">
+  <defs>
+    <linearGradient id="ls-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8FDBFF"/><stop offset=".7" stop-color="#3B9BF0"/><stop offset="1" stop-color="#1E62C9"/></linearGradient>
+    <linearGradient id="ls-gold" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFE9A3"/><stop offset=".5" stop-color="#F0BA43"/><stop offset="1" stop-color="#B3700C"/></linearGradient>
+    <clipPath id="ls-clip"><rect x="16" y="18" width="96" height="72" rx="8"/></clipPath>
+  </defs>
+  <ellipse cx="64" cy="118" rx="44" ry="6" fill="#000" opacity=".35"/>
+  <!-- tilted backing card -->
+  <rect x="22" y="12" width="96" height="72" rx="9" fill="#14305E" stroke="#1B1207" stroke-width="4" transform="rotate(6 70 48)"/>
+  <!-- frame -->
+  <rect x="12" y="14" width="104" height="80" rx="11" fill="url(#ls-gold)" stroke="#1B1207" stroke-width="4.5"/>
+  <g clip-path="url(#ls-clip)">
+    <rect x="16" y="18" width="96" height="72" fill="url(#ls-sky)"/>
+    <circle cx="90" cy="38" r="11" fill="#FFF1A8" stroke="#FFD34E" stroke-width="3"/>
+    <path d="M16 74 Q40 66 64 72 T112 70 V90 H16 Z" fill="#1A55B0"/>
+    <path d="M30 76 Q50 54 76 62 Q86 66 92 76 Z" fill="#4CC36E" stroke="#1B1207" stroke-width="2.5" stroke-linejoin="round"/>
+    <path d="M40 72 Q56 60 70 66" fill="none" stroke="#9BEA9F" stroke-width="2.5" stroke-linecap="round"/>
+    <!-- palm -->
+    <path d="M58 64 Q60 50 56 40" fill="none" stroke="#7B4A22" stroke-width="4" stroke-linecap="round"/>
+    <path d="M56 40 Q46 36 40 42 M56 40 Q66 34 72 40 M56 40 Q50 30 42 32 M56 40 Q62 30 70 30" fill="none" stroke="#2E9E52" stroke-width="4" stroke-linecap="round"/>
+    <path d="M16 82 Q28 79 40 82 T64 82 T88 82 T112 82" fill="none" stroke="#9FD4FF" stroke-width="2" opacity=".8"/>
+  </g>
+  <rect x="16" y="18" width="96" height="72" rx="8" fill="none" stroke="#1B1207" stroke-width="2.5"/>
+  <!-- loading bar -->
+  <rect x="26" y="100" width="76" height="12" rx="6" fill="#0D1B33" stroke="#1B1207" stroke-width="3.5"/>
+  <rect x="29" y="103" width="46" height="6" rx="3" fill="#56AEFC"/>
+  <rect x="29" y="103" width="46" height="2.5" rx="1.2" fill="#C9E7FF" opacity=".8"/>
+</svg>

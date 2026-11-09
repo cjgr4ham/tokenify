@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-70 -72 140 140" width="140" height="140" role="img" aria-label="TOKENIFY compass">
+  <defs>
+    <linearGradient id="cg-gold" x1="0" y1="-60" x2="0" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFEBA8"/><stop offset=".45" stop-color="#F3C34F"/><stop offset="1" stop-color="#B8770F"/>
+    </linearGradient>
+    <linearGradient id="cg-ring" x1="-50" y1="-50" x2="50" y2="50" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFF0B8"/><stop offset=".5" stop-color="#E9B23C"/><stop offset="1" stop-color="#9C6209"/>
+    </linearGradient>
+    <radialGradient id="cg-gem" cx="-2.5" cy="-3" r="10" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFF4C2"/><stop offset=".35" stop-color="#FFC531"/><stop offset="1" stop-color="#D7650C"/>
+    </radialGradient>
+    <radialGradient id="cg-disc" cx="0" cy="-12" r="50" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1D2B47"/><stop offset="1" stop-color="#0A111F"/>
+    </radialGradient>
+  </defs>
+  <!-- bezel: four arcs, gaps where the cardinal points pass through -->
+  <g fill="none" stroke="#2A1904" stroke-width="12.5" stroke-linecap="butt">
+    <path d="M 8.1 -48.8 A 49.5 49.5 0 0 1 48.8 -8.1"/><path d="M 48.8 8.1 A 49.5 49.5 0 0 1 8.1 48.8"/>
+    <path d="M -8.1 48.8 A 49.5 49.5 0 0 1 -48.8 8.1"/><path d="M -48.8 -8.1 A 49.5 49.5 0 0 1 -8.1 -48.8"/>
+  </g>
+  <g fill="none" stroke="url(#cg-ring)" stroke-width="9" stroke-linecap="butt">
+    <path d="M 8.1 -48.8 A 49.5 49.5 0 0 1 48.8 -8.1"/><path d="M 48.8 8.1 A 49.5 49.5 0 0 1 8.1 48.8"/>
+    <path d="M -8.1 48.8 A 49.5 49.5 0 0 1 -48.8 8.1"/><path d="M -48.8 -8.1 A 49.5 49.5 0 0 1 -8.1 -48.8"/>
+  </g>
+  <!-- dial -->
+  <circle r="44" fill="url(#cg-disc)" stroke="#2A1904" stroke-width="2"/>
+  <circle r="38.5" fill="none" stroke="#E9B23C" stroke-opacity=".35" stroke-width="1.4"/>
+  <g stroke="#F3C34F" stroke-opacity=".55" stroke-width="1.6" stroke-linecap="round">
+    <path d="M0 -38.5V-34M27.2 -27.2l-3.2 3.2M38.5 0H34M27.2 27.2l-3.2 -3.2M0 38.5V34M-27.2 27.2l3.2 -3.2M-38.5 0H-34M-27.2 -27.2l3.2 3.2"/>
+  </g>
+  <!-- diagonal (short) points -->
+  <g stroke="#2A1904" stroke-width="1.6" stroke-linejoin="round">
+    <path d="M0 0L23 -23L0 -9Z" fill="#FBE29A"/><path d="M0 0L23 -23L9 0Z" fill="#C98A1E"/>
+    <path d="M0 0L23 23L9 0Z" fill="#FBE29A"/><path d="M0 0L23 23L0 9Z" fill="#C98A1E"/>
+    <path d="M0 0L-23 23L0 9Z" fill="#FBE29A"/><path d="M0 0L-23 23L-9 0Z" fill="#C98A1E"/>
+    <path d="M0 0L-23 -23L-9 0Z" fill="#FBE29A"/><path d="M0 0L-23 -23L0 -9Z" fill="#C98A1E"/>
+  </g>
+  <!-- cardinal (long) points; north is longest -->
+  <g stroke="#2A1904" stroke-width="2" stroke-linejoin="round">
+    <path d="M0 0L0 -66L-11 -11Z" fill="#FFF3C7"/><path d="M0 0L0 -66L11 -11Z" fill="#E2A02C"/>
+    <path d="M0 0L60 0L11 -11Z" fill="#FBE29A"/><path d="M0 0L60 0L11 11Z" fill="#C98A1E"/>
+    <path d="M0 0L0 60L11 11Z" fill="#FBE29A"/><path d="M0 0L0 60L-11 11Z" fill="#C98A1E"/>
+    <path d="M0 0L-60 0L-11 11Z" fill="#FBE29A"/><path d="M0 0L-60 0L-11 -11Z" fill="#C98A1E"/>
+  </g>
+  <!-- centre jewel -->
+  <circle r="11" fill="url(#cg-gold)" stroke="#2A1904" stroke-width="2"/>
+  <circle r="7" fill="url(#cg-gem)"/>
+  <ellipse cx="-2.6" cy="-3.2" rx="2.4" ry="1.5" fill="#FFFFFF" fill-opacity=".85" transform="rotate(-30 -2.6 -3.2)"/>
+</svg>

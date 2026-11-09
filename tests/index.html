@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TOKENIFY | Test Suite</title>
+<link rel="icon" href="../assets/brand/compass.svg" type="image/svg+xml">
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 24px 16px 60px; background: #0b1120; color: #e8dfc8; font: 14px/1.5 ui-monospace, Consolas, monospace; }
+  h1 { font: 700 22px/1.2 system-ui, sans-serif; letter-spacing: .04em; margin: 0 0 4px; color: #ffd56b; }
+  h2 { font: 600 15px system-ui, sans-serif; margin: 22px 0 6px; color: #9fb4d9; border-bottom: 1px solid #22304d; padding-bottom: 4px; }
+  #summary { font: 700 16px system-ui, sans-serif; margin: 8px 0 18px; }
+  #summary.pass { color: #6fe3a5; } #summary.fail { color: #ff7b7b; }
+  .row { padding: 3px 0; white-space: pre-wrap; word-break: break-word; }
+  .pass { color: #8fe3b4; } .fail { color: #ff8c8c; } .running { color: #8892a8; }
+  p.note { color: #8892a8; max-width: 70ch; font-family: system-ui, sans-serif; }
+  a { color: #ffd56b; }
+</style>
+</head>
+<body>
+<h1>TOKENIFY test suite</h1>
+<p class="note">Exact-probability checks, numerical accuracy against exact rational and 320-bit arithmetic, statistical tests of real random draws, and Live Tracker data-model tests. <a href="../index.html">Back to the app</a></p>
+<div id="summary">Running&hellip;</div>
+<div id="results"></div>
+<script src="../js/config.js"></script>
+<script src="../js/util.js"></script>
+<script src="../js/bigfloat.js"></script>
+<script src="../js/probability-engine.js"></script>
+<script src="../js/reward-engine.js"></script>
+<script src="../js/sim-core.js"></script>
+<script src="../js/tracker-model.js"></script>
+<script src="test-runner.js"></script>
+<script src="probability-tests.js"></script>
+<script src="simulation-tests.js"></script>
+<script src="tracker-tests.js"></script>
+<script>
+  window.addEventListener('load', function () { T.run(new URLSearchParams(location.search).get('only') || ''); });
+</script>
+</body>
+</html>

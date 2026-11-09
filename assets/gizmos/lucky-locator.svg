@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Lucky Locator">
+  <defs>
+    <linearGradient id="ll-gold" x1="0" y1="20" x2="0" y2="112" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFE9A3"/><stop offset=".5" stop-color="#F2BE48"/><stop offset="1" stop-color="#B9760F"/></linearGradient>
+    <radialGradient id="ll-glass" cx="56" cy="58" r="34" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#E9FFF0"/><stop offset=".55" stop-color="#9BEDB6"/><stop offset="1" stop-color="#2FA866"/></radialGradient>
+    <radialGradient id="ll-leaf" cx="0" cy="-2" r="9" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#9DFFB4"/><stop offset="1" stop-color="#16994A"/></radialGradient>
+  </defs>
+  <ellipse cx="64" cy="114" rx="34" ry="6" fill="#000" opacity=".35"/>
+  <!-- hanging loop -->
+  <circle cx="64" cy="20" r="9" fill="none" stroke="#1B1207" stroke-width="9"/>
+  <circle cx="64" cy="20" r="9" fill="none" stroke="url(#ll-gold)" stroke-width="5"/>
+  <rect x="56" y="24" width="16" height="12" rx="3" fill="url(#ll-gold)" stroke="#1B1207" stroke-width="3.5"/>
+  <!-- casing -->
+  <circle cx="64" cy="70" r="42" fill="url(#ll-gold)" stroke="#1B1207" stroke-width="4.5"/>
+  <circle cx="64" cy="70" r="35" fill="#7A4A08" stroke="#1B1207" stroke-width="2"/>
+  <g fill="#FFE9A3" opacity=".9"><circle cx="64" cy="31.5" r="2"/><circle cx="102.5" cy="70" r="2"/><circle cx="64" cy="108.5" r="2"/><circle cx="25.5" cy="70" r="2"/></g>
+  <!-- glass face -->
+  <circle cx="64" cy="70" r="31" fill="url(#ll-glass)" stroke="#1B1207" stroke-width="2.5"/>
+  <g stroke="#1B6B3F" stroke-width="2" stroke-linecap="round" opacity=".55"><path d="M64 43v6M91 70h-6M64 97v-6M37 70h6"/></g>
+  <!-- four-leaf clover gem -->
+  <g transform="translate(64 70)" stroke="#0E4A27" stroke-width="2">
+    <path d="M2 4 Q10 18 6 26" fill="none" stroke="#0E4A27" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="-8" cy="-8" r="9" fill="url(#ll-leaf)"/><circle cx="8" cy="-8" r="9" fill="url(#ll-leaf)"/>
+    <circle cx="-8" cy="8" r="9" fill="url(#ll-leaf)"/><circle cx="8" cy="8" r="9" fill="url(#ll-leaf)"/>
+    <circle r="5" fill="#FFE27A" stroke="#7A4A08"/>
+  </g>
+  <!-- needle -->
+  <path d="M64 70 L82 48 L67 66 Z" fill="#FF5A5A" stroke="#1B1207" stroke-width="1.5" stroke-linejoin="round"/>
+  <!-- glass highlight -->
+  <path d="M42 56 A26 26 0 0 1 60 42" fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round" opacity=".7"/>
+  <!-- lucky sparkles -->
+  <g fill="#B8FFC9" stroke="#1B1207" stroke-width="1.5" stroke-linejoin="round">
+    <path d="M108 26l3 8 8 3-8 3-3 8-3-8-8-3 8-3z"/><path d="M20 30l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/>
+  </g>
+</svg>

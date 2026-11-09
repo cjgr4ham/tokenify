@@ -1,0 +1,60 @@
+/* TOKENIFY — keyframes and motion primitives */
+@keyframes scene-turn { to { transform: translate(-50%, -50%) rotate(360deg); } }
+@keyframes loader-in { from { opacity: 0; transform: translateY(10px) scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes view-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-in { from { opacity: 0; transform: translateY(16px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes toast-in { from { opacity: 0; transform: translateY(14px) scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes toast-out { to { opacity: 0; transform: translateY(8px) scale(.97); } }
+
+/* wordmark */
+@keyframes wm-intro { 0% { transform: rotate(-120deg); } 70% { transform: rotate(12deg); } 85% { transform: rotate(-5deg); } 100% { transform: rotate(0); } }
+@keyframes wm-sheen { 0% { opacity: 0; transform: rotate(20deg) translateX(-70px); } 15% { opacity: 1; } 85% { opacity: 1; } 100% { opacity: 0; transform: rotate(20deg) translateX(90px); } }
+
+/* idle chest */
+@keyframes chest-breathe { 0%, 100% { transform: scale(1, 1); } 50% { transform: scale(1.012, .992); } }
+@keyframes chest-hop { 0% { transform: translateY(0) scale(1, 1); } 18% { transform: translateY(0) scale(1.04, .95); } 40% { transform: translateY(-14px) scale(.97, 1.04); } 62% { transform: translateY(0) scale(1.03, .96); } 80% { transform: translateY(-3px) scale(.995, 1.01); } 100% { transform: translateY(0) scale(1, 1); } }
+@keyframes glint-pulse { 0%, 100% { opacity: .15; transform: translate(-50%, -50%) scale(.8); } 50% { opacity: .85; transform: translate(-50%, -50%) scale(1.15); } }
+@keyframes shine-sweep { 0%, 72% { background-position: 160% 0; } 100% { background-position: -60% 0; } }
+@keyframes aura-breathe { 0%, 100% { opacity: .55; transform: translate(-50%, -50%) scale(1); } 50% { opacity: .8; transform: translate(-50%, -50%) scale(1.06); } }
+@keyframes rays-turn { to { transform: translate(-50%, -50%) rotate(360deg); } }
+@keyframes dust-float { 0% { transform: translate3d(0, 0, 0); opacity: 0; } 12% { opacity: var(--o, .6); } 88% { opacity: var(--o, .6); } 100% { transform: translate3d(var(--dx, 20px), -160px, 0); opacity: 0; } }
+@keyframes shadow-hop { 0%, 100% { transform: translateX(-50%) scale(1); opacity: .7; } 40% { transform: translateX(-50%) scale(.8); opacity: .45; } }
+
+/* reveal */
+@keyframes rv-rise { 0% { opacity: 0; transform: translateY(70px) scale(.4); } 55% { opacity: 1; transform: translateY(-10px) scale(1.06); } 78% { transform: translateY(3px) scale(.98); } 100% { opacity: 1; transform: none; } }
+@keyframes rv-pop { 0% { opacity: 0; transform: translateY(40px) scale(.6); } 60% { opacity: 1; transform: translateY(-6px) scale(1.04); } 100% { opacity: 1; transform: none; } }
+@keyframes rv-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+@keyframes rv-glow { 0%, 100% { opacity: .65; transform: scale(1); } 50% { opacity: 1; transform: scale(1.08); } }
+@keyframes rv-out { to { opacity: 0; transform: translateY(-12px) scale(.96); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes spin-rev { to { transform: rotate(-360deg); } }
+@keyframes cine-rays-in { from { opacity: 0; transform: translate(-50%, -50%) scale(.3) rotate(-40deg); } to { opacity: 1; transform: translate(-50%, -50%) scale(1) rotate(0); } }
+@keyframes token-rise {
+  0% { opacity: 0; transform: translate(-50%, 40%) scale(.18) rotate(-25deg); filter: brightness(3) blur(2px); }
+  40% { opacity: 1; filter: brightness(1.8) blur(0); }
+  62% { transform: translate(-50%, -50%) scale(1.18) rotate(6deg); filter: brightness(1.25); }
+  80% { transform: translate(-50%, -50%) scale(.96) rotate(-2deg); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1) rotate(0); filter: none; }
+}
+@keyframes token-hover { 0%, 100% { transform: translate(-50%, -50%) translateY(0) rotate(0); } 50% { transform: translate(-50%, -50%) translateY(-8px) rotate(1.5deg); } }
+@keyframes banner-slam { 0% { opacity: 0; transform: scale(1.8); letter-spacing: .3em; } 60% { opacity: 1; transform: scale(.96); } 100% { opacity: 1; transform: none; } }
+@keyframes kicker-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes flash-burst { 0% { opacity: 0; } 12% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes shimmer-text { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+@keyframes outfit-materialise { 0% { opacity: 0; transform: translate(-50%, -50%) scale(.6); filter: brightness(4) blur(6px); } 55% { opacity: 1; filter: brightness(2) blur(1px); } 100% { opacity: 1; transform: translate(-50%, -50%) scale(1); filter: none; } }
+@keyframes halo-pulse { 0%, 100% { opacity: .7; transform: translate(-50%, -50%) scale(1); } 50% { opacity: 1; transform: translate(-50%, -50%) scale(1.08); } }
+@keyframes card-flip { 0% { opacity: 0; transform: rotateY(90deg) translateY(10px) scale(.9); } 60% { opacity: 1; transform: rotateY(-8deg) scale(1.03); } 100% { opacity: 1; transform: none; } }
+@keyframes dot-in { from { opacity: 0; transform: scale(0); } to { opacity: 1; transform: scale(1); } }
+@keyframes count-bump { 0% { transform: scale(1); } 35% { transform: scale(1.06); } 100% { transform: scale(1); } }
+@keyframes count-dip { 0% { transform: scale(1); } 35% { transform: scale(.96); } 100% { transform: scale(1); } }
+@keyframes plus-ring { 0% { opacity: .7; transform: translate(-50%, -50%) scale(.6); } 100% { opacity: 0; transform: translate(-50%, -50%) scale(1.5); } }
+@keyframes pulse-dot { 0%, 100% { box-shadow: 0 0 0 0 rgba(111, 227, 165, .55); } 50% { box-shadow: 0 0 0 7px rgba(111, 227, 165, 0); } }
+@keyframes celebrate-in { 0% { opacity: 0; transform: translate(-50%, -40%) scale(.8); } 100% { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
+
+/* reduced motion: keep fades, drop movement */
+.reduce-motion *, .reduce-motion *::before, .reduce-motion *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+.reduce-motion .rv, .reduce-motion .cine, .reduce-motion .view { animation: fade-in .25s ease both !important; }
+@media (prefers-reduced-motion: reduce) {
+  .scene-compass { animation: none; }
+}
