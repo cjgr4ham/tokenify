@@ -84,11 +84,21 @@
     sumMaxTerms: 60000000       // double-precision tail-sum terms
   };
 
-  // Optional cloud accounts (Supabase). See README.md > "Accounts & sync".
+  // Accounts backend (Supabase). See README.md > "Accounts & sync".
   // The key goes in js/supabase-key.js: the project's *publishable* key (sb_publishable_..., or the legacy
-  // "anon" key). It is public by design and protected by row-level security. Without it: guest mode.
+  // "anon" key). It is public by design; every table is protected by row-level security and server-side checks.
   // A secret / service_role key is refused here, so it can never be used from the browser.
+  // Development only: on localhost, ?backend=local switches that origin to the local test backend in dev/
+  // (?backend=live switches back). This switch is ignored everywhere except localhost.
   var SUPABASE = (function () {
+    var isLocalHost = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+    if (isLocalHost) {
+      try {
+        var want = new URLSearchParams(location.search).get('backend');
+        if (want === 'local' || want === 'live') localStorage.setItem('tokenify.device.backend', want);
+        if (localStorage.getItem('tokenify.device.backend') === 'local') return { url: 'http://127.0.0.1:54321', anonKey: 'local-dev-key', local: true, realtime: false };
+      } catch (e) { /* storage blocked: use the live backend */ }
+    }
     var c = window.TOKENIFY_SUPABASE || {};
     var url = String(c.url || 'https://sbzwbxtqplblfngeqlzo.supabase.co').trim().replace(/\/+$/, '');
     var key = String(c.anonKey || window.TOKENIFY_SUPABASE_KEY || '').trim();
@@ -101,10 +111,28 @@
       if (window.console) console.error('TOKENIFY: js/supabase-key.js holds a SECRET key. Use the publishable key instead. Accounts are off.');
       key = '';
     }
-    return { url: url, anonKey: key };
+    return { url: url, anonKey: key, local: false, realtime: true };
   })();
 
+  // Public profile pictures (a fixed set of TOKENIFY artwork: no uploads, nothing to moderate).
+  var AVATARS = [
+    { id: 'compass', name: 'Compass', art: 'assets/brand/compass.svg', ring: '#f6c24a' },
+    { id: 'token', name: 'Pirate Token', art: 'assets/tokens/pirate-token-160.png', ring: '#ffb93f' },
+    { id: 'outfit', name: 'Gold Outfit', art: 'assets/rewards/gold-outfit.webp', ring: '#ffe58a' },
+    { id: 'vehicle', name: 'Vehicle', art: 'assets/rewards/vehicle-decal.webp', ring: '#c084ff' },
+    { id: 'pickaxe', name: 'Pickaxe', art: 'assets/rewards/pickaxe-backbling.svg', ring: '#56aefc' },
+    { id: 'jam', name: 'Jam Track', art: 'assets/rewards/jam-track.svg', ring: '#56aefc' },
+    { id: 'loading', name: 'Loading Screen', art: 'assets/rewards/loading-screen.webp', ring: '#56aefc' },
+    { id: 'lucky', name: 'Lucky Locator', art: 'assets/gizmos/lucky-locator.webp', ring: '#c86bff' },
+    { id: 'sprite', name: 'Sprite Locator', art: 'assets/gizmos/sprite-locator.webp', ring: '#ff4d5e' },
+    { id: 'extractor', name: 'Portable Extractor', art: 'assets/gizmos/portable-extractor.webp', ring: '#4f8dff' },
+    { id: 'accelerator', name: 'Extraction Accelerator', art: 'assets/gizmos/extraction-accelerator.webp', ring: '#7ee04a' },
+    { id: 'fireworks', name: 'Golden Fireworks', art: 'assets/gizmos/golden-fireworks.svg', ring: '#ffd84a' },
+    { id: 'chest', name: 'Pirate Chest', art: 'assets/chest/close-00.webp', ring: '#e09a2c' }
+  ];
+
   TK.config = {
+    AVATARS: AVATARS,
     APP_NAME: 'TOKENIFY',
     TIERS: TIERS,
     REWARDS: REWARDS,

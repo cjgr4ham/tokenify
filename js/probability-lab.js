@@ -537,8 +537,8 @@
       U.$('#lh-export-dist').addEventListener('click', exportDist);
       U.$('#lh-clear').addEventListener('click', function () { TK.ui.confirm({ title: 'Clear laboratory history?', message: 'Removes saved Probability Lab runs from this browser. Your interactive collection is not affected.', confirmLabel: 'Clear', danger: true }).then(function (ok) { if (ok) { TK.store.lab.clear(); renderHistory(); } }); });
       U.bus.on('lab-changed', renderHistory);
-      U.bus.on('view', function (v) { if (v === 'lab') { chart.resize(); } });
-      window.addEventListener('resize', U.debounce(function () { if (TK.app.view() === 'lab') renderChart(); }, 200));
+      U.bus.on('view', function (v) { if (v === 'probability') { chart.resize(); } });
+      window.addEventListener('resize', U.debounce(function () { if (TK.app.view() === 'probability') renderChart(); }, 200));
       theory(); renderReverse(); renderHistory();
     }
   };

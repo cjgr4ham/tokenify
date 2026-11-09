@@ -1,0 +1,13 @@
+{
+  "name": "tokenify-dev",
+  "private": true,
+  "description": "Local test tooling for TOKENIFY: runs the real Supabase SQL in PGlite and a small local Supabase stand-in for browser testing.",
+  "type": "module",
+  "scripts": {
+    "test:backend": "node test-backend.mjs",
+    "local-backend": "node local-supabase.mjs"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.15"
+  }
+}

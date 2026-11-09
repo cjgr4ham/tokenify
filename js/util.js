@@ -35,9 +35,17 @@
   var lsOk = (function () {
     try { var k = '__tk_probe__'; window.localStorage.setItem(k, '1'); window.localStorage.removeItem(k); return true; } catch (e) { return false; }
   })();
+  // Everything except device preferences ('settings', 'device.*') is kept per account: once signed in,
+  // keys live under 'tokenify.u.<account id>.' so two people sharing a browser never mix their data.
+  var scope = null;
+  function scoped(k) { return scope && k !== 'settings' && k.indexOf('device.') !== 0; }
   U.storage = {
     available: lsOk,
-    key: function (k) { return TK.config.STORAGE_PREFIX + k; },
+    setScope: function (id) { scope = id ? String(id).replace(/[^a-zA-Z0-9-]/g, '') : null; },
+    scope: function () { return scope; },
+    key: function (k) { return TK.config.STORAGE_PREFIX + (scoped(k) ? 'u.' + scope + '.' : '') + k; },
+    // the pre-accounts (unscoped) copy of a key, if any: used once to offer importing old data
+    legacyKey: function (k) { return TK.config.STORAGE_PREFIX + k; },
     getRaw: function (k) {
       var key = this.key(k);
       if (lsOk) { try { return window.localStorage.getItem(key); } catch (e) { /* fall through */ } }

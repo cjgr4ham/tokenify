@@ -185,6 +185,8 @@
     var list = g.ts || (g.ts = []);
     if (!list.length) list.push(tSec); else list.push(Math.max(0, tSec - tsLast(g)));
     g.chests += 1; s.chests += 1; s.lastChestAt = nowWall();
+    // which chest this was (game + position), so listeners such as squad tracking can follow it
+    this.lastAdded = { gid: g.id, sid: s.id, idx: list.length - 1, at: nowWall() };
     this.save('chest');
     return { ok: true, game: g, autoStarted: autoStarted, autoGame: autoGame };
   };
@@ -206,6 +208,7 @@
       target = games[0] || null;
     }
     var removedGame = false;
+    this.lastRemoved = target ? { gid: target.id, idx: target.ts && target.ts.length ? target.ts.length - 1 : null } : { gid: null, idx: null };
     if (target) {
       if (target.ts && target.ts.length) target.ts.pop(); else target.adj -= 1;
       target.chests -= 1; s.chests -= 1;

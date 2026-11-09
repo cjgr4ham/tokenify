@@ -549,6 +549,9 @@
   // ---------------- init ----------------
   TK.trackerUI = {
     onKey: function (e) { return onKey(e); },
+    // used by Home's RESUME TRACKING (only this tab may change the tracker if it owns it)
+    resume: function () { if (isOwner && model && model.status() === 'paused') doResume(); },
+    isOwner: function () { return isOwner; },
     init: function () {
       model = new TK.TrackerModel(U.storage);
       checkOwner();

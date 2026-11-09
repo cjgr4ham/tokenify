@@ -96,3 +96,13 @@
 :root[data-theme="light"] .skip-btn { background: rgba(255, 255, 255, 0.75); color: var(--text-dim); }
 :root[data-theme="light"] .latest-card img { filter: drop-shadow(0 6px 10px rgba(80, 52, 16, 0.28)) drop-shadow(0 0 12px color-mix(in srgb, var(--tc) 40%, transparent)); }
 :root[data-theme="light"] .footer { border-top-color: rgba(120, 88, 36, 0.14); }
+
+/* accounts, Home and squads in the light theme */
+:root[data-theme="light"] .home-name,
+:root[data-theme="light"] .hs-main .hs-v { background: linear-gradient(180deg, #e0a326, #b06e0e 58%, #7a4606); -webkit-background-clip: text; background-clip: text; color: transparent; }
+:root[data-theme="light"] .code { color: #8a5208; }
+:root[data-theme="light"] .avatar { background: radial-gradient(circle at 50% 35%, #fffaf0, #efe2c4); }
+:root[data-theme="light"] .badge { box-shadow: 0 0 0 2px #f7efdd, 0 0 8px rgba(200, 140, 30, 0.45); }
+:root[data-theme="light"] .auth-hint.bad, :root[data-theme="light"] .rel-tag.bad { color: #b3261e; }
+:root[data-theme="light"] .presence.p-online { color: #1d8a55; }
+:root[data-theme="light"] .menu-item.danger { color: #b3261e; }

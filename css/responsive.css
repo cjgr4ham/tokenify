@@ -1,4 +1,5 @@
 ﻿/* TOKENIFY — responsive layout */
+.tab .ts { display: none; }
 .reduce-motion .stage-dust { display: none; }
 
 @media (max-width: 1180px) {
@@ -28,7 +29,8 @@
     display: grid; grid-template-columns: repeat(4, 1fr); gap: 0;
   }
   .tab { flex-direction: column; justify-content: center; gap: 4px; padding: 0 4px; font-size: 11px; letter-spacing: .06em; }
-  .tab span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .tab .tl { display: none; }
+  .tab .ts { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   .tab .i { width: 22px; height: 22px; }
   .tab::after { top: 0; bottom: auto; height: 3px; left: 22%; right: 22%; }
   main { padding-top: 14px; padding-bottom: calc(96px + env(safe-area-inset-bottom)); }

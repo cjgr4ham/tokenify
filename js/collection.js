@@ -77,8 +77,8 @@
   TK.collection = {
     init: function () {
       els = { grid: U.$('#col-grid'), found: U.$('#col-found'), ring: U.$('#col-ring'), sub: U.$('#col-sub'), ordCount: U.$('#col-ord-count'), ordShare: U.$('#col-ord-share'), ordOdds: U.$('#col-ord-odds'), jackpots: U.$('#col-jackpots'), table: U.$('#col-table'), lab: U.$('#col-lab-stats') };
-      U.bus.on('interactive-changed', function () { if (TK.app.view() === 'collection') render(); else els.dirty = true; });
-      U.bus.on('lab-changed', function () { if (TK.app.view() === 'collection') render(); });
+      U.bus.on('interactive-changed', function () { if (TK.app.view() === 'simulator' && TK.app.simSub() === 'collection') render(); else els.dirty = true; });
+      U.bus.on('lab-changed', function () { if (TK.app.view() === 'simulator' && TK.app.simSub() === 'collection') render(); });
       U.bus.on('view', function (v) { if (v === 'collection') render(); });
       render();
     }

@@ -81,28 +81,80 @@ keeps its complement and logarithm, so tiny values show as an honest bound or 10
 - A browser page cannot see key presses while Fortnite itself has focus; keep TOKENIFY focused on a
   second monitor (or click it before pressing Space).
 
-## Accounts & sync (optional)
+## Accounts, friends & parties
 
-Without setup, TOKENIFY runs in **guest mode** (saved in this browser). To enable accounts:
+TOKENIFY needs an account: a **username and password**, nothing else (no email, phone or social
+login). Signing in keeps you signed in across refreshes and browser restarts for 30 days of
+inactivity; logging out, resetting your password or signing out other devices ends sessions on the
+server immediately.
 
-1. Create a free project at [supabase.com](https://supabase.com).
-2. In the SQL editor, run **`supabase/schema.sql`**. It creates the table, row-level security and
-   the validated write function.
-3. In **Authentication › URL Configuration**, add the address you serve TOKENIFY from (for example
-   `http://localhost:8080`) as the Site URL / redirect URL.
-4. Put your project URL into `SUPABASE` in **`js/config.js`**, and your **publishable** key
-   (`sb_publishable_…`, or the legacy `anon` key) in place of `PASTE_KEY_HERE` in **`js/supabase-key.js`**.
-   Never use a secret / `service_role` key in the browser. TOKENIFY refuses one if it is pasted by mistake.
+- **Recovery without email:** sign-up shows 8 one-time **recovery codes** (copy or download them).
+  "Forgot password?" takes your username, one unused code and a new password, then signs out every
+  other device. You can make a fresh set of codes from **Account › Security**.
+- **Home** (`#home`) is the landing page: your real totals, CPG, token chance, tracking time, party
+  and recent activity. It never starts or resumes a session by itself.
+- **Friends** (`#friends`, the people icon in the header): search by username, send / accept /
+  decline / cancel requests, remove or block players, and see who's online, tracking or in a party.
+  You can hide your online status and stop prefix search in **Account › Privacy**.
+- **Parties** (`#party`): up to 4 players. Invite friends or share a 30-minute party code. The leader
+  starts and ends **squad games**; everyone keeps counting with their own Live Counter and the
+  squad total adds up live. Your personal count is always the big number.
+- **Squads Fill:** after a squad game, add teammates who don't use TOKENIFY as *exact* (manually
+  reported), *estimated* (Barely looted / Some looting / Hunted chests: adjustable percentages of
+  your own count, in Settings › Squad estimates) or *unknown* (nothing invented). Linked players are
+  never estimated.
+- **Squad stats** (Party › Squad history & stats): *Linked squad CPG* uses only games where everyone
+  was linked; *Estimated squad CPG* includes reported and estimated teammates; partial and
+  unconfirmed games are counted separately. Squad-wide drop chances describe drops anywhere in the
+  squad, never your personal chance.
 
-Then use the account button in the top bar: sign up (with email confirmation), log in, reset
-password, log out, or delete the account. Guest data can be uploaded or merged on first sign-in;
-merges are by record ID and never overwrite. Offline changes sync when you are back online.
-Accounts activate only once `js/config.js` and `js/supabase-key.js` are filled in; otherwise TOKENIFY
-stays in guest mode.
+### How it works (security)
+
+- Backend: Supabase (Postgres). Everything lives in **`supabase/accounts-v2.sql`**: tables, row-level
+  security, and the `tk_*` functions the site calls. The browser has **no direct table access**;
+  each function checks the caller's session and permissions on the server.
+- Passwords are hashed with **bcrypt** (pgcrypto, cost 11) and checked in the database. Supabase Auth's
+  hosted sign-up needs an email or phone, so TOKENIFY doesn't use it for accounts. The browser holds
+  a throwaway *anonymous* Supabase session purely as a transport, and a server-side TOKENIFY
+  session links it to your account (30-day sliding expiry, revocable).
+- Rate limits on sign-in, sign-up, recovery, username checks, search, requests, invites and party
+  codes; account lock-out after 10 wrong passwords in 15 minutes.
+- Squad chests are events with their own IDs, so retries and reconnects never count twice; a
+  removal targets the exact event. Shared totals are rebuilt from those events on the server.
+- Live updates use Supabase Realtime on two signal tables (version counters only), with polling as
+  a fallback.
+
+### Setting up a Supabase project
+
+1. Create a project at [supabase.com](https://supabase.com) and run **`supabase/accounts-v2.sql`** in
+   its SQL editor (safe to run again).
+2. **Authentication › Sign In / Providers:** turn on **Allow anonymous sign-ins** (the transport
+   session). Email sign-in can be switched off; TOKENIFY doesn't use it.
+3. Put your project URL in `js/config.js` and its **publishable** key (`sb_publishable_…`) in
+   `js/supabase-key.js`. Never use a secret / `service_role` key in the browser (TOKENIFY refuses one).
+
+Data saved in a browser before accounts existed can be added to your account once (you're asked
+after signing in, or use **Account › Import earlier data**).
+
+## Local development backend
+
+`dev/` runs the real `supabase/accounts-v2.sql` inside [PGlite](https://pglite.dev) (Postgres in
+WebAssembly), so everything can be tested with throwaway accounts that never touch the live project:
+
+```
+cd dev
+npm install
+node test-backend.mjs        # 205 backend checks: accounts, sessions, recovery, friends, blocking,
+                             # parties, squad games, idempotent chests, teammates, permissions
+node local-supabase.mjs      # local stand-in for the Supabase APIs + the site on :8090
+```
+
+Then open `http://localhost:8090/?backend=local` (and `http://127.0.0.1:8090/?backend=local` for a
+second account side by side). `?backend=live` switches back; the switch only works on localhost.
 
 ## Tests
 
-Open **`tests/index.html`** (or `http://localhost:8080/tests/`). Checks include: exact weights and
+Open **`tests/index.html`** (or `http://localhost:8080/tests/`) for the 62 in-browser tests; the backend has its own suite (see *Local development backend*). Checks include: exact weights and
 fractions, PMF/CDF against exact rational arithmetic, identities, edge cases (0 chests, n > 2^53,
 invalid input, 0% / 100% targets), reverse-calculator boundaries verified with 320-bit arithmetic,
 prediction-interval definitions, sampler boundary mapping, chi-square tests of real draws, worker
@@ -124,15 +176,19 @@ one-token rule, export/import).
 ## Files
 
 ```
-index.html            app shell (4 tabs)        start.bat / start-server.ps1   local launcher
-css/                  base, animations, open-chests, lab, tracker, collection, theme-light, responsive
-js/config.js          drop table, rarity tiers, limits, Supabase settings (the only place odds live)
+index.html            app shell: sign-in, Home, Live Counter, Chest Simulator (+ Collection), Probability Lab, Friends & party
+css/                  base, animations, open-chests, lab, tracker, collection, auth, home, social, theme-light, responsive
+js/config.js          drop table, rarity tiers, limits, avatars, Supabase settings (the only place odds live)
 js/reward-engine.js   exact integer weights + unbiased crypto sampler + ownership helper
 js/probability-engine.js  binomial engine, formatting, 320-bit high-precision engine
 js/bigfloat.js        BigInt floating point            js/sim-core.js   worker jobs + host
 js/chest-animation.js chest frames, reveals, cinematics  js/particles.js  canvas particles
+js/api.js             backend client, RPC errors, live updates   js/auth.js  sign-in, sign-up, recovery codes
+js/home.js  js/social.js (friends)  js/party.js (parties, squad games)  js/profile.js (account menu)
 js/open-chests.js  js/probability-lab.js  js/charts.js  js/tracker-model.js  js/tracker-ui.js
 js/collection.js  js/persistence.js  js/sync.js  js/audio.js  js/ui.js  js/util.js  js/app.js
-supabase/schema.sql   optional accounts             tests/            in-browser test suite
+js/vendor/            @supabase/supabase-js 2.118.0 (MIT)
+supabase/accounts-v2.sql   the whole backend      supabase/schema.sql   v1 (email accounts, retired)
+dev/                  local PGlite backend + backend test suite   tests/   in-browser test suite
 assets/               chest frames, token, rewards, gizmos, brand (wordmark, compass, icons), sources
 ```

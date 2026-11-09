@@ -29,8 +29,8 @@
   // ---------------- interactive openings ----------------
   var HIST_MAX = 250, JACKPOT_MAX = 300;
   function blankInteractive() { return { v: 1, total: 0, counts: {}, first: {}, last: {}, hist: [], jackpots: [], created: Date.now() }; }
-  var inter = S.get('interactive', null);
-  if (!inter || inter.v !== 1) inter = blankInteractive();
+  function loadInteractive() { var v = S.get('interactive', null); return (v && v.v === 1) ? v : blankInteractive(); }
+  var inter = loadInteractive();
 
   TK.store = TK.store || {};
   function owns(id) { return (inter.counts[id] || 0) > 0; }
@@ -69,8 +69,9 @@
 
   // ---------------- laboratory runs ----------------
   var LAB_MAX = 60;
-  var lab = S.get('lab', null);
-  if (!lab || lab.v !== 1) lab = { v: 1, runs: [], totals: { runs: 0, chests: '0', tokens: 0 } };
+  function blankLab() { return { v: 1, runs: [], totals: { runs: 0, chests: '0', tokens: 0 } }; }
+  function loadLab() { var v = S.get('lab', null); return (v && v.v === 1) ? v : blankLab(); }
+  var lab = loadLab();
   TK.store.lab = {
     runs: function () { return lab.runs; },
     totals: function () { return lab.totals; },
@@ -85,6 +86,9 @@
       U.bus.emit('lab-changed', run);
       return run;
     },
-    clear: function () { lab = { v: 1, runs: [], totals: { runs: 0, chests: '0', tokens: 0 } }; S.set('lab', lab); U.bus.emit('lab-changed', null); }
+    clear: function () { lab = blankLab(); S.set('lab', lab); U.bus.emit('lab-changed', null); }
   };
+
+  // Re-read both stores (called once the signed-in account's storage scope is set).
+  TK.store.load = function () { inter = loadInteractive(); lab = loadLab(); };
 })(window.TK = window.TK || {});

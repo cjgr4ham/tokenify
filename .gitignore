@@ -6,3 +6,8 @@ desktop.ini
 .vscode/
 .idea/
 .claude/
+
+# local development tooling
+dev/node_modules/
+dev/.localdb/
+dev/seed-test-accounts.json
