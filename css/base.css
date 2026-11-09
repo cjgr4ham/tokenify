@@ -224,6 +224,8 @@ main:focus { outline: none; }
 .btn-ghost.danger:hover { border-color: var(--danger); color: #ffd0d0; background: rgba(255, 114, 114, 0.08); }
 .btn-ghost .i { width: 17px; height: 17px; }
 .link-btn { color: var(--gold-text); font: 600 14px var(--f-body); text-decoration: underline; text-underline-offset: 3px; }
+.auth-links { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px 18px; margin-top: 4px; }
+.auth-links .link-btn { padding: 6px 0; }
 
 /* ---------- chips & segmented controls ---------- */
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
