@@ -83,6 +83,7 @@
     else { els.endGame.disabled = !isOwner || !sess || st === 'paused'; els.endGame.innerHTML = sess ? 'Start game timer now' : 'End game &amp; ready next'; els.endGame.classList.toggle('waiting', !!sess); }
     renderTime();
     renderBanner();
+    renderRecon();
     if (els.details.open) renderDetails();
   }
   function renderTime() {
@@ -295,7 +296,28 @@
     if (g.status === 'void') return h('span', { class: 'gbadge void', text: 'Voided' });
     if (g.status === 'incomplete') return h('span', { class: 'gbadge inc', text: 'Incomplete' });
     if (g.status === 'active') return h('span', { class: 'gbadge live', text: 'In progress' });
+    if (g.replay) {
+      if (g.replay.status === 'pending') return h('span', { class: 'gbadge inc', text: 'Replay check' });
+      return h('span', { class: 'gbadge replay', text: g.replay.manual ? (g.replay.status === 'kept-manual' ? 'Manual · replay checked' : 'Replay-checked') : 'Replay', title: 'From your PC’s Fortnite replay' });
+    }
     return null;
+  }
+  // Hybrid counting: after a match the replay checks the game you counted by hand, and you choose which to keep.
+  function renderRecon() {
+    var box = els.recon; if (!box) return;
+    var pend = isOwner ? model.pendingReplays() : [];
+    box.innerHTML = ''; box.hidden = !pend.length;
+    pend.slice(0, 3).forEach(function (g) {
+      var mine = g.replay.manual.chests, rep = g.replay.chests, d = rep - mine;
+      var use = h('button', { class: 'btn-gold btn-sm', type: 'button' }, ['Use replay (' + rep + ')']);
+      var keep = h('button', { class: 'btn-ghost btn-sm', type: 'button' }, ['Keep mine (' + mine + ')']);
+      use.addEventListener('click', function () { model.resolveReplay(g.id, true); ui.toast('Game ' + model.gameNo(g.id) + ' now counts ' + rep + ' chests. Your count is kept for reference.'); });
+      keep.addEventListener('click', function () { model.resolveReplay(g.id, false); ui.toast('Kept your count for game ' + model.gameNo(g.id) + '.'); });
+      box.appendChild(h('div', { class: 'recon-card' }, [
+        h('div', { class: 'recon-text' }, [h('b', { text: 'Replay check · game ' + model.gameNo(g.id) }),
+          h('span', { class: 'num', text: ' Manual: ' + mine + ' · Replay: ' + rep + ' · Difference: ' + (d > 0 ? '+' : d < 0 ? '−' : '±') + Math.abs(d) })]),
+        h('div', { class: 'recon-actions' }, [use, keep])]));
+    });
   }
   function paneGames(p) {
     var all = model.cpgAll(), rec = model.cpgRecent(10), prev = model.cpgPrevious(10), best = model.bestGame(), sess = model.cpgSession();
@@ -339,15 +361,21 @@
       stat('Started', U.fmtDate(g.start) + ' (' + quality(g.startKind) + ')'), stat('Ended', g.end ? U.fmtDate(g.end) + ' (' + quality(g.endKind) + ')' : 'in progress'),
       stat('Duration', dur != null ? U.fmtSpan(dur) + (g.startKind === 'inferred' ? ' (from first chest)' : '') : '—'), stat('Session', 'Session ' + model.sessionNo(g.sid)),
       stat('Status', g.status === 'completed' ? 'Counts toward CPG' : g.status === 'void' ? 'Voided — excluded from CPG' : g.status === 'incomplete' ? 'Incomplete — excluded from CPG' : 'In progress'),
-      stat('Data', (g.edits && g.edits.length ? g.edits.length + ' correction(s)' : 'as recorded') + (g.adj ? ' · ' + (g.adj > 0 ? '+' : '') + g.adj + ' manual' : ''))
+      g.replay ? stat('Source', 'Fortnite replay from your PC: ' + g.replay.replayChests + ' chests' + (g.replay.corrected != null ? ', corrected to ' + g.replay.corrected : '') + (g.replay.manual ? ' · you counted ' + g.replay.manual.chests : '') + (g.replay.historical ? ' · imported history' : ''))
+        : stat('Data', (g.edits && g.edits.length ? g.edits.length + ' correction(s)' : 'as recorded') + (g.adj ? ' · ' + (g.adj > 0 ? '+' : '') + g.adj + ' manual' : ''))
     ])]);
     var acts = h('div', { class: 'grow-actions' });
     function act(label, fn, kind) { var b = h('button', { type: 'button', class: kind === 'danger' ? 'btn-ghost danger' : 'btn-ghost' }, [label]); b.addEventListener('click', fn); acts.appendChild(b); }
     if (g.status === 'void') act('Restore game', function () { model.restoreGame(g.id); ui.toast('Game ' + no + ' counts toward CPG again.'); });
     else act('Void game', function () { model.voidGame(g.id); ui.toast('Game ' + no + ' voided. Its chests stay in your totals.', { action: { label: 'Undo', onClick: function () { model.restoreGame(g.id); } } }); }, 'danger');
     if (g.status === 'incomplete') act('Mark complete', function () { model.markComplete(g.id); });
-    act('Edit game', function () { editGame(g); });
-    if (model.gameTimes(g.id).length >= 2) act('Split game', function () { splitGame(g); });
+    if (g.replay && g.replay.status !== 'kept-manual') {
+      // counts from a replay are corrected on the server, so every device and your squad see the same number
+      act('Correct count…', function () { if (TK.pc) TK.pc.open('history'); });
+    } else {
+      act('Edit game', function () { editGame(g); });
+      if (model.gameTimes(g.id).length >= 2) act('Split game', function () { splitGame(g); });
+    }
     if (model.state.lastEndedGid === g.id && model.canUndoEndGame()) act('Undo game end', function () { model.undoEndGame(); });
     body.appendChild(acts); li.appendChild(body);
     return li;
@@ -403,8 +431,9 @@
   function sessionRow(s) {
     var no = model.sessionNo(s.id), open = openSession === s.id, act = model.activeMs(s.id);
     var toks = model.state.tokens.filter(function (t) { return !t.undone && t.sid === s.id; }).length;
-    var head = h('button', { type: 'button', class: 'grow-head', 'aria-expanded': String(open) }, [h('span', { class: 'g-no', text: 'Session ' + no }), h('span', { class: 'g-c num', text: U.fmtInt(s.chests) + ' chests' }), h('span', { class: 'g-d muted', text: U.fmtSpan(act) + ' · ' + toks + (toks === 1 ? ' token' : ' tokens') }),
-      s.status !== 'completed' ? h('span', { class: 'gbadge live', text: s.status === 'active' ? 'Active' : 'Paused' }) : null]);
+    var head = h('button', { type: 'button', class: 'grow-head', 'aria-expanded': String(open) }, [h('span', { class: 'g-no', text: 'Session ' + no }), h('span', { class: 'g-c num', text: U.fmtInt(s.chests) + ' chests' }), h('span', { class: 'g-d muted', text: U.fmtSpan(act) + (s.inferred ? ' in matches' : '') + ' · ' + toks + (toks === 1 ? ' token' : ' tokens') }),
+      s.status !== 'completed' ? h('span', { class: 'gbadge live', text: s.status === 'active' ? 'Active' : 'Paused' })
+        : s.inferred ? h('span', { class: 'gbadge replay', text: s.historical ? 'Imported history' : 'Auto session', title: 'Grouped from matches your PC sent. Its time is the matches’ own length.' }) : null]);
     var li = h('li', { class: 'grow' }, [head]);
     head.addEventListener('click', function () { openSession = open ? null : s.id; renderDetails(); });
     if (!open) return li;
@@ -561,7 +590,8 @@
       model.compact(400);
       var ids = { view: 'trk', status: 'trk-status', statusText: 'trk-status-text', sessionNo: 'trk-session-no', saved: 'trk-saved', banner: 'trk-banner', count: 'trk-count', plus: 'trk-plus', minus: 'trk-minus', hint: 'trk-hint',
         game: 'trk-game', gameL: 'trk-game-l', cpgAll: 'trk-cpg-all', cpgRecent: 'trk-cpg-recent', cpgRecentL: 'trk-cpg-recent-l', cpgDelta: 'trk-cpg-delta', time: 'trk-time', total: 'trk-total',
-        pSession: 'trk-p-session', pOverall: 'trk-p-overall', eta: 'trk-eta', etaS: 'trk-eta-s', endGame: 'trk-endgame', start: 'trk-start', pause: 'trk-pause', end: 'trk-end', details: 'trk-details', settingsBtn: 'trk-settings-btn' };
+        pSession: 'trk-p-session', pOverall: 'trk-p-overall', eta: 'trk-eta', etaS: 'trk-eta-s', endGame: 'trk-endgame', start: 'trk-start', pause: 'trk-pause', end: 'trk-end', details: 'trk-details', settingsBtn: 'trk-settings-btn',
+        recon: 'trk-recon' };
       Object.keys(ids).forEach(function (k) { els[k] = document.getElementById(ids[k]); });
       els.etaWrap = els.eta.parentElement;
       ui.tips.cumulative = 'Your cumulative chance of at least one Pirate Token over this many chests. Each individual chest is always exactly 1 in 137,500 — the next chest never becomes more likely.';

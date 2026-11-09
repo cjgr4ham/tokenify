@@ -8,6 +8,7 @@
 //
 //   node local-supabase.mjs            (in-memory database, wiped on restart)
 //   node local-supabase.mjs --persist  (keeps data in dev/.localdb)
+//   node local-supabase.mjs --season-start=2019-01-01  (lets old sample replays count: for e2e-companion.mjs)
 import http from 'node:http';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
@@ -23,7 +24,10 @@ const ANON_KEY = 'local-dev-key';
 const ACCESS_TTL = 3600;
 
 const persist = process.argv.includes('--persist');
-const db = await createDb(persist ? { dataDir: path.join(here, '.localdb') } : {});
+// --season-start=2019-01-01: test only, so the public sample replays (2019-2024) count as this season
+const seasonArg = process.argv.find((a) => a.startsWith('--season-start='));
+const db = await createDb({ ...(persist ? { dataDir: path.join(here, '.localdb') } : {}), ...(seasonArg ? { seasonStart: seasonArg.split('=')[1] } : {}) });
+if (seasonArg) console.log('Season start moved to ' + seasonArg.split('=')[1] + ' (test only)');
 const refreshTokens = new Map();               // token -> user id
 
 // ------------------------------------------------------------------------------------------- JWTs

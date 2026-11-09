@@ -11,3 +11,10 @@ desktop.ini
 dev/node_modules/
 dev/.localdb/
 dev/seed-test-accounts.json
+
+# Windows companion build output and local replay fixtures (large, and contain other players' match data)
+companion/**/bin/
+companion/**/obj/
+companion/**/*.user
+companion/tests/fixtures/*.replay
+publish/

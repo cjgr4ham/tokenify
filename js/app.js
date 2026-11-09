@@ -1,7 +1,7 @@
 /* TOKENIFY — application shell: sign-in gate, boot, navigation and routes, keyboard routing, settings.
  * Routes (hash based, so the static site works on any host):
  *   #home  #tracker[/sessions|games|tokens|estimates]  #simulator[/collection]  #probability
- *   #party  #friends  #requests  #login  #signup
+ *   #party  #friends  #requests  #login  #signup  #settings and #pc (dialogs over the current page)
  * Old links keep working: #open → simulator, #lab → probability, #collection → simulator/collection. */
 (function (TK) {
   'use strict';
@@ -82,8 +82,18 @@
     window.addEventListener('hashchange', function () {
       var raw = location.hash.replace(/^#\/?/, '');
       if (raw === 'login' || raw === 'signup') { show('home'); return; }   // already signed in
+      if (dialogRoute(raw)) return;
       var r = parse(location.hash); show(r.view, { sub: r.sub, fromHash: true });
     });
+  }
+  // #settings and #pc open a dialog over the page you're on (the companion's "Open TOKENIFY" links to #pc).
+  function dialogRoute(raw) {
+    if (raw !== 'settings' && raw !== 'pc') return false;
+    var back = hashFor(current || 'home', null);
+    try { history.replaceState(null, '', back); } catch (e) { /* ignore */ }
+    if (!current) show('home', { force: true });
+    setTimeout(function () { if (raw === 'pc' && TK.pc) TK.pc.open('pc'); else openSettings(); }, 0);
+    return true;
   }
 
   // ---------- global keyboard routing ----------
@@ -178,6 +188,10 @@
     body.appendChild(radioRow('Reduced motion', 'No shaking or flashing when on.', 'reducedMotion', [['system', 'System'], ['on', 'On'], ['off', 'Off']]));
     body.appendChild(h('div', { class: 'settings-group-title', text: 'Squad estimates' }));
     body.appendChild(estimatesGroup());
+    if (TK.pc) {
+      body.appendChild(h('div', { class: 'settings-group-title', text: 'Automatic PC tracking' }));
+      body.appendChild(TK.pc.settingsSection());
+    }
     body.appendChild(h('div', { class: 'settings-group-title', text: 'Your data' }));
     body.appendChild(h('p', { class: 'fine', text: 'Your Live Counter syncs to your account. Simulator openings and Probability Lab runs are hypothetical and stay in this browser, separate from your real tracker.' }));
     function resetBtn(label, message, fn) {
@@ -219,7 +233,7 @@
     document.body.classList.add('signed-in');
     var t0 = performance.now(), tasks = [];
     try { tasks.push(TK.openChests.init(function (p) { setP(0.15 + p * 0.75); })); } catch (e) { console.error(e); }
-    ['lab', 'trackerUI', 'collection', 'profile', 'social', 'party', 'home'].forEach(function (m) {
+    ['lab', 'trackerUI', 'collection', 'profile', 'social', 'party', 'pc', 'home'].forEach(function (m) {
       try { if (TK[m] && TK[m].init) TK[m].init(acc); } catch (e) { console.error('[tokenify] ' + m + ' failed to start', e); }
     });
     try { TK.sync.start(); } catch (e) { console.error(e); }
@@ -227,6 +241,7 @@
     // signing in always lands on Home; a restored session keeps the page you had open
     var r = (info.fromAuth || raw === 'login' || raw === 'signup') ? { view: 'home', sub: null } : parse(location.hash);
     show(r.view, { sub: r.sub, fromHash: false, force: true });
+    if (raw === 'settings' || raw === 'pc') dialogRoute(raw);
     // The landing pages don't need the chest artwork; the simulator waits for it (at most a few seconds).
     var wait = r.view === 'simulator' ? Promise.race([Promise.all(tasks), U.wait(7000)]) : Promise.resolve();
     if (document.fonts && document.fonts.ready) wait = Promise.all([wait, Promise.race([document.fonts.ready, U.wait(1500)])]);

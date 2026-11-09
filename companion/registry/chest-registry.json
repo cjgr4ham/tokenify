@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "updated": "2026-11-09",
+  "notes": [
+    "Which replicated Fortnite classes count as a TOKENIFY chest, and how openings are counted.",
+    "A class is a chest candidate when its name contains 'chest' and it replicates the container fields",
+    "(bAlreadySearched / SearchingPawn). Patterns are case-insensitive regular expressions matched against the",
+    "class name without its path and without the trailing _C.",
+    "Bump 'version' whenever a rule changes: the companion re-reads affected replays and the server keeps the",
+    "previous result for audit. A user's own correction is never overwritten by a re-read."
+  ],
+  "counting": {
+    "countDestroyed": true,
+    "countReopenedAfterRefill": true,
+    "staleWindowSeconds": 0.5,
+    "sameSpawnToleranceCm": 150,
+    "unknownChestPolicy": "count-and-flag"
+  },
+  "chestClassPattern": "chest",
+  "exclude": [
+    "ammo",
+    "cannon",
+    "food_?box",
+    "cooler",
+    "barrel",
+    "safe",
+    "register",
+    "fridge",
+    "toilet",
+    "mailbox",
+    "treasurehuntanimatedchest",
+    "^prop_",
+    "chestplate"
+  ],
+  "kinds": [
+    { "kind": "rare", "label": "Rare chest", "pattern": "rarechest|rare_chest|legendary", "known": ["AlwaysSpawn_RareChest", "Tiered_Chest_Rare"] },
+    { "kind": "buried", "label": "Buried chest", "pattern": "buried", "known": ["Tiered_Chest_Buried"] },
+    { "kind": "poster", "label": "Sprite poster chest", "pattern": "spriteposter|booty", "known": [] },
+    { "kind": "relic", "label": "Sprite vault chest", "pattern": "relic|extraction", "known": ["B_TieredChest_Relics"] },
+    { "kind": "regular", "label": "Chest", "pattern": "tiered_chest|tieredchest|normalchest|standardchest", "known": ["Tiered_Chest_Athena", "Tiered_Chest_Apollo_IceBox", "Tiered_Chest_Sunflower"] }
+  ],
+  "otherContainers": [
+    { "kind": "ammo", "label": "Ammo box", "pattern": "ammo" },
+    { "kind": "food", "label": "Food box", "pattern": "food_?box|cooler" },
+    { "kind": "cannon", "label": "Loot cannon", "pattern": "cannon" }
+  ]
+}

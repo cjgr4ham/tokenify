@@ -44,7 +44,15 @@ export async function createDb(opts = {}) {
   const db = new PGlite({ extensions: { pgcrypto }, ...(opts.dataDir ? { dataDir: opts.dataDir } : {}) });
   await db.exec(BOOTSTRAP);
   await db.exec(await readFile(SCHEMA_FILE, 'utf8'));
+  if (opts.seasonStart) await setSeasonStart(db, opts.seasonStart);
   return db;
+}
+
+// Test-only: moves the season start (normally Nov 1, 2026) so old sample replays count. Never used live.
+export async function setSeasonStart(db, iso) {
+  const when = new Date(iso);
+  if (isNaN(when)) throw new Error('bad season start: ' + iso);
+  await db.exec(`create or replace function tkp.season_start() returns timestamptz language sql immutable set search_path = '' as $$ select timestamptz '${when.toISOString()}' $$`);
 }
 
 const FN = /^[a-z_][a-z0-9_]*$/;

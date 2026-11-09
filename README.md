@@ -108,6 +108,28 @@ server immediately.
   unconfirmed games are counted separately. Squad-wide drop chances describe drops anywhere in the
   squad, never your personal chance.
 
+## Automatic PC tracking (Windows)
+
+PC players don't have to press anything: **TOKENIFY Companion** (`companion/`, a small Windows app) reads the replay
+Fortnite saves after each match and adds the chests you opened to your account a few seconds after the match ends.
+Switch and console players keep counting on the website, and everyone can be in the same party.
+
+- **Set up once:** turn on *Record Replays* in Fortnite, download the companion from **Settings → Automatic PC
+  tracking**, press **LINK DEVICE** and type the code into the app. Linked PCs are listed there (rename, rescan,
+  disconnect), with the import history.
+- **How your chests are counted:** *By hand*, *Automatically* (replays are the count) or *Both* (count by hand, and
+  after each match the replay checks it: Manual 35 · Replay 37 · +2, you choose). A match is never added on top of a
+  game you counted by hand.
+- Imported matches become normal games, so totals, CPG, Last 10 and token chances just work. Matches recorded while
+  no session runs are grouped into an *automatic session* whose time is the matches' own length.
+- **Corrections:** fix an imported count in Import history; the replay's number is kept for audit and a newer
+  companion never overwrites your correction. *Not my match* removes one everywhere.
+- **Squads:** each PC player's replay result is tied to the squad game by Fortnite's shared match id. Until it
+  arrives they show as *Awaiting replay* (never 0), and the total reads "85 known chests · 2 players pending".
+- **Only this season counts** (since Nov 1, 2026): the Pirate Token didn't exist before, so older matches are refused.
+
+Details, privacy and limitations: [`companion/README.md`](companion/README.md).
+
 ### How it works (security)
 
 - Backend: Supabase (Postgres). Everything lives in **`supabase/accounts-v2.sql`**: tables, row-level
@@ -123,6 +145,10 @@ server immediately.
   removal targets the exact event. Shared totals are rebuilt from those events on the server.
 - Live updates use Supabase Realtime on two signal tables (version counters only), with polling as
   a fallback.
+- PCs link with a 10-minute single-use code and then use their own device secret (stored only as a hash, rotated
+  every 30 days, revocable). One summary per match is accepted, validated (counts, times, versions, this season),
+  and stored idempotently: the same match sent again never counts twice. One Fortnite account (a hash of its id)
+  can only count for one TOKENIFY account.
 
 ### Setting up a Supabase project
 
@@ -144,7 +170,7 @@ WebAssembly), so everything can be tested with throwaway accounts that never tou
 ```
 cd dev
 npm install
-node test-backend.mjs        # 205 backend checks: accounts, sessions, recovery, friends, blocking,
+node test-backend.mjs        # 353 backend checks: accounts, sessions, recovery, friends, blocking, PC pairing, imports,
                              # parties, squad games, idempotent chests, teammates, permissions
 node local-supabase.mjs      # local stand-in for the Supabase APIs + the site on :8090
 ```
@@ -154,7 +180,7 @@ second account side by side). `?backend=live` switches back; the switch only wor
 
 ## Tests
 
-Open **`tests/index.html`** (or `http://localhost:8080/tests/`) for the 62 in-browser tests; the backend has its own suite (see *Local development backend*). Checks include: exact weights and
+Open **`tests/index.html`** (or `http://localhost:8080/tests/`) for the 71 in-browser tests (including replay imports: never 35 + 37 = 72); the backend has its own suite (see *Local development backend*). Checks include: exact weights and
 fractions, PMF/CDF against exact rational arithmetic, identities, edge cases (0 chests, n > 2^53,
 invalid input, 0% / 100% targets), reverse-calculator boundaries verified with 320-bit arithmetic,
 prediction-interval definitions, sampler boundary mapping, chi-square tests of real draws, worker

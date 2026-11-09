@@ -84,6 +84,17 @@
     st.gameOrder.forEach(function (gid) { var g = st.games[gid]; if (!g) return; g.chests = gameChests(g); if (st.sessions[g.sid]) st.sessions[g.sid].chests += g.chests; });
     st.sessionOrder = st.sessionOrder.filter(function (sid) { return st.sessions[sid]; });
     st.gameOrder = st.gameOrder.filter(function (gid) { return st.games[gid]; });
+    // Sessions inferred from replays are always rebuilt from their matches: start, end, and time = the matches'
+    // own lengths added up (never the gaps between them).
+    st.sessionOrder.forEach(function (sid) {
+      var s = st.sessions[sid]; if (!s.inferred) return;
+      var games = st.gameOrder.map(function (gid) { return st.games[gid]; }).filter(function (g) { return g.sid === sid; });
+      if (!games.length) return;
+      s.start = Math.min.apply(null, games.map(function (g) { return g.start; }));
+      s.end = Math.max.apply(null, games.map(function (g) { return g.end || g.start; }));
+      s.activeMs = games.reduce(function (a, g) { return a + Math.max(0, (g.end || g.start) - g.start); }, 0);
+      s.lastChestAt = s.end;
+    });
     if (st.currentGid && (!st.games[st.currentGid] || st.games[st.currentGid].status !== 'active')) st.currentGid = null;
     if (st.currentSid && (!st.sessions[st.currentSid] || st.sessions[st.currentSid].status === 'completed')) st.currentSid = null;
     void self;
@@ -315,6 +326,132 @@
   Model.prototype.endGameAt = function (gid, endMs, kind) { var g = this.state.games[gid]; if (!g || g.status !== 'active') return; g.end = endMs; g.endKind = kind || 'inferred'; g.status = 'completed'; this.state.currentGid = null; this.state.lastEndedGid = gid; this.save('game-end'); };
   Model.prototype.gameTimes = function (gid) { var g = this.state.games[gid]; return g ? tsList(g).map(function (s) { return s * 1000; }) : []; };
   Model.prototype.gameLastChest = function (gid) { var g = this.state.games[gid]; var l = g && tsLast(g); return l ? l * 1000 : null; };
+
+  // ---------------- automatic PC tracking (matches imported from Fortnite replays) ----------------
+  // An imported match becomes a normal game, so totals, CPG, Last 10 and token chances need no special cases.
+  // Its ids are derived from the server's ids, so every browser builds the very same game and session and
+  // syncing never duplicates it. A match never adds on top of a game you counted by hand: that game is
+  // reconciled instead (your manual count is kept for reference).
+  Model.prototype.replayGame = function (matchId) {
+    var st = this.state;
+    for (var i = st.gameOrder.length - 1; i >= 0; i--) { var g = st.games[st.gameOrder[i]]; if (g && g.replay && g.replay.id === matchId) return g; }
+    return null;
+  };
+  Model.prototype.pendingReplays = function () {
+    var st = this.state;
+    return st.gameOrder.map(function (gid) { return st.games[gid]; }).filter(function (g) { return g && g.replay && g.replay.status === 'pending'; });
+  };
+  function replayTimes(m) {
+    var base = Math.floor(Date.parse(m.started_at) / 1000);
+    return (m.chest_times || []).map(function (t) { return base + Math.floor(Number(t) || 0); }).sort(function (a, b) { return a - b; });
+  }
+  function setCounts(g, times, chests) {
+    var effective = Math.max(0, Math.round(chests));
+    g.ts = tsEncode(times);
+    g.adj = effective - times.length;          // a correction made on the website shifts the count, keeps the times
+    g.chests = gameChests(g);
+  }
+  function setReplayCounts(g, m) { setCounts(g, replayTimes(m), m.chests); }
+  function replayMeta(m, extra) {
+    var r = { id: m.id, key: m.match_key, v: m.updated_at, chests: m.chests, replayChests: m.replay_chests, corrected: m.corrected_chests,
+      historical: !!m.historical, party: m.party ? m.party.link : null };
+    Object.keys(extra || {}).forEach(function (k) { r[k] = extra[k]; });
+    return r;
+  }
+  // mode: 'auto' (replay counts are final) or 'hybrid' (you count live; the replay then checks it).
+  // Returns { action: 'created' | 'updated' | 'reconciled' | 'pending' | 'removed' | 'none', game }.
+  Model.prototype.applyReplay = function (m, mode) {
+    var st = this.state, g = this.replayGame(m.id), now = nowWall();
+    var startMs = Date.parse(m.started_at), endMs = Date.parse(m.ended_at);
+    if (!isFinite(startMs) || !isFinite(endMs)) return { action: 'none' };
+    if (m.excluded) return g ? this.removeReplay(m.id) : { action: 'none' };
+    if (g) {
+      if (g.replay.v === m.updated_at) return { action: 'none', game: g };
+      var keep = { manual: g.replay.manual, status: g.replay.status, decidedAt: g.replay.decidedAt, at: g.replay.at };
+      if (g.replay.manual) keep.times = replayTimes(m);
+      g.replay = replayMeta(m, keep);
+      if (g.replay.status !== 'pending' && g.replay.status !== 'kept-manual') setReplayCounts(g, m);
+      this.recount(); this.save('replay');
+      return { action: 'updated', game: g };
+    }
+    // 1) a game you counted by hand during this match: reconcile, never add on top
+    var lo = Math.floor(startMs / 1000) - 90, hi = Math.floor(endMs / 1000) + 90;
+    var overlap = st.gameOrder.map(function (gid) { return st.games[gid]; }).filter(function (x) {
+      if (!x || x.replay || x.status === 'void') return false;
+      var t = tsList(x);
+      if (t.length) return t.filter(function (s) { return s >= lo && s <= hi; }).length * 2 >= t.length;
+      var xe = x.end || x.start;
+      return x.start <= endMs && xe >= startMs;
+    });
+    if (overlap.length === 1) {
+      var mg = overlap[0];
+      mg.replay = replayMeta(m, { manual: { ts: (mg.ts || []).slice(), adj: mg.adj || 0, chests: mg.chests }, at: now,
+        status: mode === 'hybrid' ? 'pending' : 'applied', times: replayTimes(m) });
+      if (mode !== 'hybrid') {
+        setReplayCounts(mg, m);
+        mg.edits.push({ t: now, kind: 'replay', from: mg.replay.manual.chests, to: mg.chests });
+        this.log('replay', 'Game ' + this.gameNo(mg.id) + ' checked against its Fortnite replay: ' + mg.replay.manual.chests + ' counted by hand, ' + mg.chests + ' in the replay');
+      }
+      if (mg.status === 'active') { mg.end = endMs; mg.endKind = 'replay'; mg.status = 'completed'; if (st.currentGid === mg.id) st.currentGid = null; st.lastEndedGid = mg.id; }
+      this.recount(); this.save('replay');
+      return { action: mode === 'hybrid' ? 'pending' : 'reconciled', game: mg };
+    }
+    // 2) otherwise its own game: in the session you were running at the time, or in a session inferred from replays
+    var sid = null;
+    st.sessionOrder.forEach(function (id) {
+      var s = st.sessions[id];
+      if (!s.inferred && !m.historical && s.start <= startMs + 60000 && (s.end == null || s.end >= endMs - 60000)) sid = id;
+    });
+    if (!sid) {
+      sid = 'rs-' + m.auto_session;
+      if (!st.sessions[sid]) {
+        st.sessions[sid] = { id: sid, start: startMs, end: endMs, status: 'completed', activeMs: 0, adj: 0, adjLog: [], timeLog: [], lastChestAt: endMs, chests: 0,
+          inferred: true, historical: !!m.historical };
+        st.sessionOrder.push(sid);
+        st.sessionOrder.sort(function (a, b) { return st.sessions[a].start - st.sessions[b].start; });
+      }
+    }
+    var ng = { id: 'rp-' + m.id, sid: sid, start: startMs, startKind: 'replay', end: endMs, endKind: 'replay', status: 'completed', ts: [], adj: 0, edits: [], chests: 0,
+      replay: replayMeta(m, { at: now, status: 'applied' }) };
+    setReplayCounts(ng, m);
+    st.games[ng.id] = ng;
+    var at = st.gameOrder.length;
+    while (at > 0 && st.games[st.gameOrder[at - 1]] && st.games[st.gameOrder[at - 1]].start > startMs) at--;
+    st.gameOrder.splice(at, 0, ng.id);
+    this.recount(); this.save('replay');
+    return { action: 'created', game: ng };
+  };
+  // Hybrid: keep the replay's count (your manual one is kept for reference) or keep what you counted.
+  Model.prototype.resolveReplay = function (gid, useReplay) {
+    var g = this.state.games[gid]; if (!g || !g.replay || !g.replay.manual) return false;
+    g.replay.status = useReplay ? 'applied' : 'kept-manual';
+    g.replay.decidedAt = nowWall();
+    if (useReplay) setCounts(g, g.replay.times || [], g.replay.chests);
+    else { g.ts = g.replay.manual.ts.slice(); g.adj = g.replay.manual.adj; }
+    g.edits.push({ t: nowWall(), kind: 'replay', from: g.replay.manual.chests, to: useReplay ? g.replay.chests : g.replay.manual.chests });
+    this.recount();
+    this.log('replay', 'Game ' + this.gameNo(gid) + ': ' + (useReplay ? 'replay count used (' + g.replay.chests + ', you counted ' + g.replay.manual.chests + ')' : 'kept your own count (' + g.replay.manual.chests + ', replay said ' + g.replay.chests + ')'));
+    this.save('replay');
+    return true;
+  };
+  // "Not my match": the game disappears; a game you had counted by hand gets its own count back.
+  Model.prototype.removeReplay = function (matchId) {
+    var st = this.state, g = this.replayGame(matchId); if (!g) return { action: 'none' };
+    if (g.id.indexOf('rp-') === 0) {
+      var sid = g.sid;
+      delete st.games[g.id];
+      st.gameOrder = st.gameOrder.filter(function (id) { return id !== g.id; });
+      var s = st.sessions[sid];
+      if (s && s.inferred && !st.gameOrder.some(function (id) { return st.games[id] && st.games[id].sid === sid; })) {
+        delete st.sessions[sid]; st.sessionOrder = st.sessionOrder.filter(function (id) { return id !== sid; });
+      }
+    } else {
+      if (g.replay.manual) { g.ts = g.replay.manual.ts; g.adj = g.replay.manual.adj; }
+      delete g.replay;
+    }
+    this.recount(); this.save('replay');
+    return { action: 'removed' };
+  };
 
   // ---------------- corrections ----------------
   // target: 'game' (current or most recent game in the session) | 'session' (not assigned to a game)

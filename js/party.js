@@ -41,8 +41,19 @@
   }
   function mine(g) { return g ? g.members.filter(function (m) { return m.is_me; })[0] || null : null; }
   function completenessLabel(c) {
-    return { complete: 'Complete — everyone linked', reported: 'Includes manually reported counts', estimated: 'Includes estimates', partial: 'Partial — some teammates unknown', unconfirmed: 'Not confirmed' }[c] || c;
+    return { complete: 'Complete — everyone linked', reported: 'Includes manually reported counts', estimated: 'Includes estimates', partial: 'Partial — some teammates unknown', unconfirmed: 'Not confirmed',
+      pending: 'Waiting for PC replays' }[c] || c;
   }
+  // PC players on automatic tracking count with their replay, which arrives after the match: until then they
+  // show as pending, never as zero.
+  function countText(m) {
+    if (!m) return '0';
+    if (m.pending) return m.replay_state === 'processing' ? 'Processing…' : 'Awaiting replay';
+    if (m.missing) return 'No replay';
+    return U.fmtInt(m.chests || 0);
+  }
+  function srcTag(m) { return m ? h('span', { class: 'src-tag' + (m.source === 'replay' ? ' replay' : ''), text: m.source === 'replay' ? 'Replay' : 'Manual', title: m.source === 'replay' ? 'Counted from this player’s Fortnite replay' : 'Counted live in the Live Counter' }) : null; }
+  function pendingNote(g) { return g && g.pending_count ? U.fmtInt(g.pending_count) + (g.pending_count === 1 ? ' player pending' : ' players pending') : ''; }
 
   // ---------------- state ----------------
   function adopt(p) {
@@ -86,7 +97,7 @@
     linked.push({ id: ev.id, gid: info.gid, idx: info.idx, st: 'queued' });
     outbox.push(ev); saveQueues();
     var m = party.game && mine(party.game);           // optimistic: show it right away, confirmed by the server
-    if (m) { m.chests += 1; party.game.known_total += 1; renderAll(); }
+    if (m && m.source !== 'replay') { m.chests = (m.chests || 0) + 1; party.game.known_total += 1; renderAll(); }
     flush();
   }
   function onChestRemoved(info) {
@@ -101,7 +112,7 @@
     else outbox.push({ op: 'remove', id: entry.id });
     saveQueues();
     var m = party && party.game && mine(party.game);
-    if (m && m.chests > 0 && entry.st !== 'unlinked') { m.chests -= 1; party.game.known_total -= 1; renderAll(); }
+    if (m && m.source !== 'replay' && m.chests > 0 && entry.st !== 'unlinked') { m.chests -= 1; party.game.known_total -= 1; renderAll(); }
     flush();
   }
   async function flush() {
@@ -152,10 +163,10 @@
     if (g) {
       var rows = h('ul', { class: 'sq-members' }, g.members.map(function (m) {
         var pres = (party.members.filter(function (x) { return x.id === m.account_id; })[0] || {}).presence;
-        return h('li', { class: 'sq-m' + (m.is_me ? ' me' : '') + (m.left_at ? ' left' : '') }, [av(m, 'sm'), h('span', { class: 'sq-name', text: m.is_me ? 'You' : m.username }), m.left_at ? h('span', { class: 'fine', text: 'left' }) : h('span', { class: 'presence-dot p-' + (pres || 'offline'), title: pres || 'offline' }), h('span', { class: 'sq-c num', text: U.fmtInt(m.chests) })]);
+        return h('li', { class: 'sq-m' + (m.is_me ? ' me' : '') + (m.left_at ? ' left' : '') }, [av(m, 'sm'), h('span', { class: 'sq-name', text: m.is_me ? 'You' : m.username }), m.left_at ? h('span', { class: 'fine', text: 'left' }) : h('span', { class: 'presence-dot p-' + (pres || 'offline'), title: pres || 'offline' }), srcTag(m), h('span', { class: 'sq-c num' + (m.pending || m.missing ? ' pending' : ''), text: countText(m) })]);
       }));
       box.appendChild(rows);
-      box.appendChild(h('div', { class: 'sq-total' }, [h('div', {}, [h('span', { class: 'sq-l', text: 'Known squad chests' }), h('span', { class: 'sq-v num', text: U.fmtInt(g.known_total) })]),
+      box.appendChild(h('div', { class: 'sq-total' }, [h('div', {}, [h('span', { class: 'sq-l', text: g.pending_count ? 'Known chests · ' + pendingNote(g) : 'Known squad chests' }), h('span', { class: 'sq-v num', text: U.fmtInt(g.known_total) })]),
         h('div', {}, [h('span', { class: 'sq-l', text: 'Squad openings — drop chance' }), h('span', { class: 'sq-v num small', text: pct(g.known_total) })])]));
       if (party.is_leader) box.appendChild(h('div', { class: 'sq-actions' }, [btn('End squad game', 'ghost', function (b) { endGame(b, g); }, 'btn-sm')]));
     } else {
@@ -194,7 +205,7 @@
       var slot = h('div', { class: 'slot filled' + (m.is_me ? ' me' : '') + (m.is_leader ? ' has-crown' : '') }, [
         m.is_leader ? h('span', { class: 'crown', title: 'Party leader', 'aria-label': 'Party leader' }) : null,
         av(m, 'xl'), h('b', { class: 'slot-name', text: m.username + (m.is_me ? ' (you)' : '') }), TK.social.presenceTag(m.presence),
-        g ? h('span', { class: 'slot-count' }, [h('span', { class: 'num', text: U.fmtInt(gm[m.id] ? gm[m.id].chests : 0) }), h('small', { text: 'this game' })]) : null
+        g ? h('span', { class: 'slot-count' }, [h('span', { class: 'num' + (gm[m.id] && (gm[m.id].pending || gm[m.id].missing) ? ' pending' : ''), text: countText(gm[m.id]) }), h('small', {}, [gm[m.id] ? srcTag(gm[m.id]) : null, ' this game'])]) : null
       ]);
       var crown = slot.querySelector('.crown'); if (crown) crown.innerHTML = '<svg class="i"><use href="#i-crown"/></svg>';
       if (party.is_leader && !m.is_me) {
@@ -254,12 +265,13 @@
     if (g) {
       card.appendChild(h('div', { class: 'panel-head' }, [h('h2', { class: 'panel-title' }, ['Squad game ' + g.number + ' ', h('span', { class: 'live-pill', text: 'Live' })]), h('span', { class: 'fine game-clock', text: elapsed(g.started_at) })]));
       card.appendChild(h('div', { class: 'game-totals' }, [
-        h('div', { class: 'gt main' }, [h('span', { class: 'gt-l', text: 'Known squad chests' }), h('span', { class: 'gt-v num', text: U.fmtInt(g.known_total) }), h('span', { class: 'fine', text: 'Recorded live by ' + g.members.filter(function (m) { return !m.left_at; }).length + ' linked player' + (g.members.length === 1 ? '' : 's') })]),
+        h('div', { class: 'gt main' }, [h('span', { class: 'gt-l', text: g.pending_count ? 'Known chests' : 'Known squad chests' }), h('span', { class: 'gt-v num', text: U.fmtInt(g.known_total) }),
+          h('span', { class: 'fine', text: g.pending_count ? pendingNote(g) + ': PC replays are added when each match ends' : 'Recorded by ' + g.members.filter(function (m) { return !m.left_at; }).length + ' linked player' + (g.members.length === 1 ? '' : 's') })]),
         h('div', { class: 'gt' }, [h('span', { class: 'gt-l', text: 'Squad openings — drop chance' }), h('span', { class: 'gt-v num', text: pct(g.known_total) }), h('span', { class: 'fine', text: 'Chance of at least one Pirate Token drop in these openings' })])
       ]));
       card.appendChild(h('ul', { class: 'contrib' }, g.members.map(function (m) {
-        var share = g.known_total ? m.chests / g.known_total : 0;
-        return h('li', { class: m.is_me ? 'me' : '' }, [av(m, 'sm'), h('span', { class: 'c-name', text: (m.is_me ? 'You' : m.username) + (m.left_at ? ' (left)' : m.former ? ' (former player)' : '') }), h('span', { class: 'c-bar' }, [h('span', { style: { width: (share * 100).toFixed(1) + '%' } })]), h('span', { class: 'c-n num', text: U.fmtInt(m.chests) })]);
+        var share = g.known_total && m.chests ? m.chests / g.known_total : 0;
+        return h('li', { class: m.is_me ? 'me' : '' }, [av(m, 'sm'), h('span', { class: 'c-name', text: (m.is_me ? 'You' : m.username) + (m.left_at ? ' (left)' : m.former ? ' (former player)' : '') }), srcTag(m), h('span', { class: 'c-bar' }, [h('span', { style: { width: (share * 100).toFixed(1) + '%' } })]), h('span', { class: 'c-n num' + (m.pending || m.missing ? ' pending' : ''), text: countText(m) })]);
       })));
       if (party.is_leader) card.appendChild(h('div', { class: 'row-actions' }, [btn('End squad game', 'gold', function (b) { endGame(b, g); })]));
       else card.appendChild(h('p', { class: 'fine', text: 'Count your own chests in the Live Counter. ' + leaderName() + ' ends the squad game.' }));
@@ -273,7 +285,17 @@
   }
   function lastGameSummary(lg) {
     var wrap = h('div', { class: 'last-game' }, [h('div', { class: 'field-label', text: 'Last squad game (' + lg.number + ')' }),
-      h('div', { class: 'lg-line' }, [h('b', { class: 'num', text: U.fmtInt(lg.known_total) + ' known chests' }), lg.estimated_squad_total !== lg.known_total ? h('span', { text: ' · ≈' + fmtCount(Number(lg.estimated_squad_total)) + ' with teammates' }) : null, h('span', { class: 'tag sm comp-' + lg.completeness, text: completenessLabel(lg.completeness) })])]);
+      h('div', { class: 'lg-line' }, [h('b', { class: 'num', text: U.fmtInt(lg.known_total) + ' known chests' }), lg.pending_count ? h('span', { text: ' · ' + pendingNote(lg) }) : null, lg.estimated_squad_total !== lg.known_total ? h('span', { text: ' · ≈' + fmtCount(Number(lg.estimated_squad_total)) + ' with teammates' }) : null, h('span', { class: 'tag sm comp-' + lg.completeness, text: completenessLabel(lg.completeness) })])]);
+    if (lg.members.some(function (m) { return m.source === 'replay' || m.pending || m.missing; })) {
+      wrap.appendChild(h('ul', { class: 'contrib slim' }, lg.members.map(function (m) {
+        return h('li', { class: m.is_me ? 'me' : '' }, [av(m, 'sm'), h('span', { class: 'c-name', text: m.is_me ? 'You' : m.username }), srcTag(m), h('span', { class: 'c-n num' + (m.pending || m.missing ? ' pending' : ''), text: countText(m) })]);
+      })));
+    }
+    var me = mine(lg);
+    if (me && me.missing) {
+      wrap.appendChild(h('div', { class: 'row-actions' }, [h('span', { class: 'fine', text: 'Your PC’s replay for this game never arrived.' }),
+        btn('Use what I counted live (' + U.fmtInt(me.live_chests || 0) + ')', 'ghost', function (b) { act(b, 'tk_party_use_live_count', { p_game: lg.id }, 'Squad game ' + lg.number + ' now uses your live count.'); }, 'btn-sm')]));
+    }
     if (lg.is_participant && lg.open_slots > 0) wrap.appendChild(h('div', { class: 'row-actions' }, [btn(lg.teammates.length ? 'Edit teammates' : 'Add teammates not on TOKENIFY', 'ghost', function () { assess(lg); }, 'btn-sm'),
       lg.completeness === 'unconfirmed' ? btn('Everyone was linked', 'ghost', function (b) { act(b, 'tk_party_game_confirm', { p_game: lg.id }, 'Marked as a complete linked game.'); }, 'btn-sm') : null].filter(Boolean)));
     return wrap;
@@ -366,7 +388,7 @@
     (game.teammates || []).forEach(function (t) { addRow(t); });
     if (!rows.length) addRow(null);
     var body = h('div', { class: 'assess' }, [
-      h('p', { class: 'muted', text: 'Linked players: ' + game.members.map(function (m) { return (m.is_me ? 'You' : m.username) + ' ' + m.chests; }).join(' · ') + ' (' + game.known_total + ' known). Optional, and only for players who don’t use TOKENIFY.' }),
+      h('p', { class: 'muted', text: 'Linked players: ' + game.members.map(function (m) { return (m.is_me ? 'You' : m.username) + ' ' + countText(m); }).join(' · ') + ' (' + game.known_total + ' known). Optional, and only for players who don’t use TOKENIFY.' }),
       rowsBox, h('div', {}, [addBtn]), msg,
       h('p', { class: 'fine', text: 'Exact counts are marked as manually reported. Estimates use your adjustable assumptions (Settings › Squad estimates). Linked players are never estimated.' })
     ]);
@@ -404,7 +426,7 @@
       body.appendChild(statsBlock(r.stats));
       if (!r.games.length) { body.appendChild(h('div', { class: 'empty' }, [h('b', { text: 'No squad games yet' }), h('span', { text: 'Start a squad game from your party and they’ll show up here.' })])); return; }
       body.appendChild(h('ul', { class: 'hist-list' }, r.games.map(function (g) {
-        var who = g.members.map(function (m) { return (m.is_me ? 'You' : m.username) + ' ' + m.chests; }).join(' · ');
+        var who = g.members.map(function (m) { return (m.is_me ? 'You' : m.username) + ' ' + countText(m); }).join(' · ');
         var mates = g.teammates.map(function (t) { return (t.label || 'Teammate ' + t.slot) + ': ' + (t.mode === 'exact' ? t.exact_count + ' (reported)' : t.mode === 'estimated' ? '≈' + fmtCount(Number(t.estimate_count)) + ' (estimated)' : 'unknown'); }).join(' · ');
         var li = h('li', { class: g.void ? 'void' : '' }, [h('div', { class: 'hl-top' }, [h('b', { text: 'Game ' + g.number }), h('span', { class: 'fine', text: new Date(g.started_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }), h('span', { class: 'tag sm comp-' + (g.void ? 'void' : g.completeness), text: g.void ? 'Void' : completenessLabel(g.completeness) })]),
           h('div', { class: 'hl-mid' }, [h('span', { class: 'num hl-total', text: U.fmtInt(g.known_total) }), h('span', { text: ' known' }), g.estimated_squad_total !== g.known_total ? h('span', { class: 'fine', text: ' · ≈' + fmtCount(Number(g.estimated_squad_total)) + ' incl. teammates' }) : null]),

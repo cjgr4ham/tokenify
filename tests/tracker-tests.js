@@ -185,6 +185,102 @@
     close(pr, exact, 1e-14, 'session chance = 1 - (137499/137500)^120 (vs 320-bit exact)');
     realClock();
   });
+  // ---------------- matches imported from Fortnite replays (automatic PC tracking) ----------------
+  var MIN = 60000;
+  function match(o) {
+    o = o || {};
+    var start = o.start != null ? o.start : fake.wall - 30 * MIN, len = o.len || 18 * MIN, n = o.chests != null ? o.chests : 37;
+    return { id: o.id || 'm-' + Math.random().toString(36).slice(2), match_key: 'fn:x', started_at: new Date(start).toISOString(), ended_at: new Date(start + len).toISOString(),
+      chests: o.corrected != null ? o.corrected : n, replay_chests: n, corrected_chests: o.corrected != null ? o.corrected : null,
+      chest_times: o.times || Array.from({ length: n }, function (_, i) { return 20 + i * 25; }), historical: !!o.historical, excluded: !!o.excluded,
+      auto_session: o.auto || 'auto-1', updated_at: o.v || '2026-11-10T10:00:00.000Z', party: null };
+  }
+  test('Replay imports', 'an imported match becomes one game in an automatic session', function () {
+    var m = fresh().m, x = match({ chests: 37 });
+    var r = m.applyReplay(x, 'auto');
+    assert(r.action === 'created' && r.game.id === 'rp-' + x.id, 'game id derived from the match id');
+    assert(m.total() === 37 && m.validGames().length === 1 && m.cpgAll().cpg === 37, 'totals and CPG include it');
+    var s = m.state.sessions[r.game.sid];
+    assert(s.inferred && s.status === 'completed' && s.activeMs === 18 * MIN, 'inferred session: time = the match length, never invented');
+    assert(m.applyReplay(x, 'auto').action === 'none' && m.total() === 37, 'the same match again changes nothing');
+    realClock();
+  });
+  test('Replay imports', 'matches close together share a session; its time never includes the gaps', function () {
+    var m = fresh().m, t0 = fake.wall - 300 * MIN;
+    m.applyReplay(match({ start: t0, chests: 10, auto: 'A' }), 'auto');
+    m.applyReplay(match({ start: t0 + 40 * MIN, chests: 12, auto: 'A' }), 'auto');
+    var sids = m.state.sessionOrder;
+    assert(sids.length === 1 && m.state.sessions[sids[0]].activeMs === 36 * MIN, 'two 18-minute matches, 40 minutes apart = 36 minutes');
+    assert(m.total() === 22 && m.cpgRecent(10).cpg === 11, 'CPG over both games');
+    realClock();
+  });
+  test('Replay imports', 'a correction on the website updates the game, keeping its chest times', function () {
+    var m = fresh().m, x = match({ chests: 37 });
+    m.applyReplay(x, 'auto');
+    var y = match({ id: x.id, chests: 37, corrected: 38, v: '2026-11-10T11:00:00.000Z' });
+    assert(m.applyReplay(y, 'auto').action === 'updated', 'newer server copy applied');
+    var g = m.replayGame(x.id);
+    assert(m.total() === 38 && g.chests === 38 && g.ts.length === 37 && g.adj === 1, 'corrected to 38; 37 timed chests kept');
+    realClock();
+  });
+  test('Replay imports', 'manual 35 + replay 37 of the same match is never 72 (automatic: replay wins, manual kept)', function () {
+    var m = fresh().m, start = fake.wall;
+    m.startGame(); chests(m, 35); m.endGame();                      // 35 counted by hand, 20 s apart, during the match
+    var r = m.applyReplay(match({ start: start - 60000, len: 16 * MIN, chests: 37 }), 'auto');
+    assert(r.action === 'reconciled', 'reconciled with the hand-counted game');
+    assert(m.total() === 37 && m.validGames().length === 1, 'total 37, still one game');
+    assert(r.game.replay.manual.chests === 35, 'the manual count is kept for reference');
+    realClock();
+  });
+  test('Replay imports', 'hybrid: the replay checks your count and you choose', function () {
+    var m = fresh().m, start = fake.wall;
+    m.startGame(); chests(m, 35); m.endGame();
+    var x = match({ start: start - 60000, len: 16 * MIN, chests: 37 });
+    var r = m.applyReplay(x, 'hybrid');
+    assert(r.action === 'pending' && m.total() === 35 && m.pendingReplays().length === 1, 'waits for your choice; nothing added');
+    m.resolveReplay(r.game.id, true);
+    assert(m.total() === 37 && !m.pendingReplays().length, 'use replay: 37');
+    m.resolveReplay(r.game.id, false);
+    assert(m.total() === 35, 'keep mine: back to 35');
+    realClock();
+  });
+  test('Replay imports', 'a match during your running session goes into that session', function () {
+    var m = fresh().m;
+    m.startSession(); advance(25 * MIN); m.tick();
+    var r = m.applyReplay(match({ start: fake.wall - 20 * MIN, len: 15 * MIN, chests: 9 }), 'auto');
+    assert(r.game.sid === m.state.currentSid && m.sessionChests() === 9, 'added to the live session (the headline count goes up)');
+    realClock();
+  });
+  test('Replay imports', 'history imports never land in the current session', function () {
+    var m = fresh().m;
+    m.startSession(); advance(25 * MIN); m.tick();
+    var r = m.applyReplay(match({ start: fake.wall - 20 * MIN, len: 15 * MIN, chests: 9, historical: true, auto: 'H' }), 'auto');
+    assert(r.game.sid !== m.state.currentSid && m.state.sessions[r.game.sid].historical && m.sessionChests() === 0, 'separate history session');
+    realClock();
+  });
+  test('Replay imports', '"not my match" removes it (and its empty automatic session); a hand-counted game gets its own count back', function () {
+    var m = fresh().m, x = match({ chests: 12 });
+    m.applyReplay(x, 'auto');
+    m.applyReplay(match({ id: x.id, chests: 12, excluded: true, v: '2026-11-10T12:00:00.000Z' }), 'auto');
+    assert(m.total() === 0 && !m.state.sessionOrder.length && !m.state.gameOrder.length, 'removed with its session');
+    var start = fake.wall; m.startGame(); chests(m, 5); m.endGame();
+    var y = match({ start: start - 60000, len: 10 * MIN, chests: 7 });
+    m.applyReplay(y, 'auto'); assert(m.total() === 7, 'reconciled to 7');
+    m.removeReplay(y.id); assert(m.total() === 5 && !m.validGames()[0].replay, 'back to the 5 counted by hand');
+    realClock();
+  });
+  test('Replay imports', 'two browsers that both applied a match merge into one game; the newest server copy wins', function () {
+    var a = fresh().m, x = match({ chests: 20 });
+    a.applyReplay(x, 'auto');
+    var b = fresh().m; b.state = JSON.parse(JSON.stringify(a.state)); b.recount();
+    b.applyReplay(match({ id: x.id, chests: 20, corrected: 21, v: '2026-11-10T13:00:00.000Z' }), 'auto');
+    var merged = TK.sync._merge(a.state, b.state), c = fresh().m;
+    c.replaceState(merged);
+    assert(c.validGames().length === 1 && c.total() === 21, 'one game, corrected count');
+    var back = TK.sync._merge(b.state, a.state), d = fresh().m; d.replaceState(back);
+    assert(d.total() === 21, 'same result whichever side merges');
+    realClock();
+  });
   test('Live Tracker', 'export and import round-trip without loss', function () {
     var t = fresh(), m = t.m;
     chests(m, 9); m.endGame(); chests(m, 2);

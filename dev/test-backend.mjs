@@ -429,6 +429,334 @@ await section('tracker snapshot sync', async () => {
   eq((await call(gina, 'tk_tracker_pull')).version, 0, "accounts never see each other's tracker");
 });
 
+// ------------------------------------------------------------------------- automatic PC tracking
+// Companions call with no browser session (the anon role) and their own device secret.
+const pc = (ip) => ({ uid: null, ip });
+const hex = (n) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, '0')).join('');
+const playerHash = () => hex(32);
+const MIN = 60e3;
+function matchPayload(o = {}) {
+  const start = o.start ?? Date.now() - 20 * MIN;
+  const end = o.end ?? start + 18 * MIN;
+  const chests = o.chests ?? 37;
+  return {
+    player_hash: o.hash, session_id: o.session === undefined ? 'S' + hex(12) : o.session,
+    replay_guid: o.guid === undefined ? hex(16) : o.guid,
+    started_at: new Date(start).toISOString(), ended_at: new Date(end).toISOString(),
+    build: '++Fortnite+Release-42.30-CL-58813929', parser_version: o.parser ?? '1.0.0', registry_version: o.registry ?? 1,
+    chests, chest_times: o.times ?? Array.from({ length: chests }, (_, i) => 30 + i * 20),
+    breakdown: o.breakdown ?? { regular: chests }, historical: o.historical ?? false, partial: o.partial ?? false,
+  };
+}
+async function linkPc(acc, ip, name = 'Gaming PC') {
+  const code = (await call(acc, 'tk_device_pair_start')).code;
+  const r = await call(pc(ip), 'tk_device_pair', { p_code: code, p_name: name, p_app_version: '1.0.0' });
+  if (!r.ok) throw new Error('pairing failed: ' + r.error);
+  return { id: r.device_id, secret: r.secret, ip, who: pc(ip) };
+}
+const dev = (d, fn, args = {}) => call(d.who, fn, { p_device: d.id, p_secret: d.secret, ...args });
+const sorted = (o) => Object.fromEntries(Object.entries(o).sort(([a], [b]) => a.localeCompare(b)));
+let sam, bea, cal, dee, beaPc, calPc, deePc, beaHash, calHash, deeHash;
+
+await section('PC pairing: one-time codes, hashed secrets, limits', async () => {
+  sam = await signup('Switch_Sam', 'joy-con drift 64');
+  bea = await signup('Pc_Bea', 'keyboard warrior 9');
+  cal = await signup('Pc_Cal', 'mouse and keys 77');
+  dee = await signup('Pc_Dee', 'rgb lights forever');
+  await throws(call(anon, 'tk_device_pair_start'), /permission denied/i, 'pairing codes need a signed-in account');
+  const start = await call(bea, 'tk_device_pair_start');
+  ok(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(start.code), 'code format XXXX-XXXX');
+  ok(new Date(start.expires_at) - Date.now() <= 10 * MIN + 5e3, 'code expires within 10 minutes');
+  eq((await call(pc('198.51.100.1'), 'tk_device_pair', { p_code: 'ZZZZ-ZZZZ' })).error, 'bad_code', 'wrong code refused');
+  const r = await call(pc('198.51.100.1'), 'tk_device_pair', { p_code: start.code.toLowerCase(), p_name: "Bea's PC", p_app_version: '1.0.0' });
+  ok(r.ok && /^[A-Za-z0-9_-]{43}$/.test(r.secret), 'paired with a 256-bit secret (any letter case, dash optional)');
+  eq(r.account.username, 'Pc_Bea', 'pairing names the account');
+  eq(r.tracking, 'auto', 'linking a PC switches the account to automatic tracking');
+  beaPc = { id: r.device_id, secret: r.secret, ip: '198.51.100.1', who: pc('198.51.100.1') };
+  eq((await call(pc('198.51.100.2'), 'tk_device_pair', { p_code: start.code })).error, 'bad_code', 'a code works only once');
+  const stored = await sql(`select encode(secret_hash, 'hex') h from tk_devices where id = $1`, [r.device_id]);
+  ok(stored[0].h.length === 64 && !stored[0].h.includes(r.secret), 'only a hash of the secret is stored');
+  const c2 = await call(cal, 'tk_device_pair_start');
+  await sql(`update tk_device_pairings set expires_at = now() - interval '1 second' where account_id = $1`, [cal.id]);
+  eq((await call(pc('198.51.100.3'), 'tk_device_pair', { p_code: c2.code })).error, 'bad_code', 'expired code refused');
+  let last; for (let i = 0; i < 12; i++) last = await call(pc('198.51.100.66'), 'tk_device_pair', { p_code: 'AAAA-AAA' + 'B' });
+  eq(last.error, 'rate_limited', 'code guessing is rate limited per IP');
+  calPc = await linkPc(cal, '198.51.100.3', "Cal's PC");
+  deePc = await linkPc(dee, '198.51.100.4', "Dee's PC");
+  for (let i = 0; i < 4; i++) await linkPc(sam, '198.51.100.' + (20 + i), 'Spare ' + i);
+  eq((await call(sam, 'tk_device_pair_start')).error, undefined, 'a fifth device is allowed');
+  await linkPc(sam, '198.51.100.30', 'Spare 5');
+  eq((await call(sam, 'tk_device_pair_start')).error, 'too_many_devices', 'at most five linked PCs');
+  const st = await call(sam, 'tk_pc_tracking_state');
+  eq(st.devices.length, 5, 'devices listed on the website');
+  for (const d of st.devices) ok((await call(sam, 'tk_device_revoke', { p_device: d.id })).ok, 'spare PC revoked');
+  await call(sam, 'tk_tracking_settings', { p_mode: 'manual' });
+  eq((await call(sam, 'tk_pc_tracking_state')).devices.length, 0, 'revoked PCs disappear from the list');
+});
+
+await section('PC device secrets: check-ins, status, revocation, rotation', async () => {
+  const hi = await dev(beaPc, 'tk_device_hello', { p_status: { state: 'waiting', folder: 'ok', queued: 2, bogus: 'x' }, p_app_version: '1.0.0' });
+  ok(hi.ok && hi.account.username === 'Pc_Bea' && hi.tracking === 'auto', 'check-in returns the account and its tracking mode');
+  eq(hi.rotate_secret, null, 'no rotation for a new secret');
+  const st = (await call(bea, 'tk_pc_tracking_state')).devices[0];
+  eq(sorted(st.status), sorted({ state: 'waiting', folder: 'ok', queued: 2, attention: 0 }), 'status stored without unknown fields');
+  ok(st.online, 'device shows as online');
+  eq((await call(beaPc.who, 'tk_device_hello', { p_device: beaPc.id, p_secret: 'x'.repeat(43) })).error, 'device_unknown', 'wrong secret refused');
+  eq((await call(beaPc.who, 'tk_device_hello', { p_device: calPc.id, p_secret: beaPc.secret })).error, 'device_unknown', "one PC's secret doesn't open another");
+  eq((await dev(beaPc, 'tk_device_hello', { p_status: { state: 'launch-missiles', queued: 'many' } })).ok, true, 'garbage status is tolerated');
+  eq((await call(bea, 'tk_pc_tracking_state')).devices[0].status.state, 'waiting', '...and stored as plain waiting');
+  // failed secrets from one IP are throttled, even if the right secret follows
+  const att = pc('203.0.113.50');
+  for (let i = 0; i < 30; i++) await call(att, 'tk_device_hello', { p_device: beaPc.id, p_secret: hex(32) });
+  eq((await call(att, 'tk_device_hello', { p_device: beaPc.id, p_secret: beaPc.secret })).error, 'rate_limited', 'secret guessing is throttled per IP');
+  ok((await dev(beaPc, 'tk_device_hello')).ok, 'the real PC on its own IP is unaffected');
+  // rotation: a 30-day-old secret gets a successor; using it retires the old one
+  await sql(`update tk_devices set secret_issued_at = now() - interval '31 days' where id = $1`, [beaPc.id]);
+  const rot = await dev(beaPc, 'tk_device_hello');
+  ok(/^[A-Za-z0-9_-]{43}$/.test(rot.rotate_secret || ''), 'new secret issued after 30 days');
+  ok((await dev(beaPc, 'tk_device_hello')).ok, 'old secret still works until the new one is used (a lost response is harmless)');
+  const old = beaPc.secret;
+  beaPc.secret = (await dev(beaPc, 'tk_device_hello')).rotate_secret;    // the latest one issued
+  ok((await dev(beaPc, 'tk_device_hello')).ok, 'new secret accepted');
+  eq((await call(beaPc.who, 'tk_device_hello', { p_device: beaPc.id, p_secret: old })).error, 'device_unknown', 'old secret retired');
+  // a separate, throwaway PC for revocation
+  const tmp = await linkPc(bea, '198.51.100.9', 'Old laptop');
+  ok((await call(bea, 'tk_device_rename', { p_device: tmp.id, p_name: 'Old laptop (attic)' })).ok, 'device renamed');
+  ok((await call(bea, 'tk_device_revoke', { p_device: tmp.id })).ok, 'device revoked from the website');
+  eq((await dev(tmp, 'tk_device_hello')).error, 'device_revoked', 'revoked PC is told so');
+  eq((await dev(tmp, 'tk_device_import', { p_match: matchPayload({ hash: playerHash() }) })).error, 'device_revoked', 'revoked PC cannot upload');
+  eq((await call(cal, 'tk_device_revoke', { p_device: beaPc.id })).error, 'not_found', "you can't revoke someone else's PC");
+  const rs = await call(bea, 'tk_device_rescan', { p_device: beaPc.id });
+  ok(rs.ok && (await dev(beaPc, 'tk_device_hello')).rescan === true, 'website RESCAN reaches the PC');
+  eq((await dev(beaPc, 'tk_device_hello')).rescan, false, '...once');
+});
+
+await section('PC profiles: one Fortnite account belongs to one TOKENIFY account', async () => {
+  beaHash = playerHash(); calHash = playerHash(); deeHash = playerHash();
+  eq((await dev(beaPc, 'tk_device_import', { p_match: matchPayload({ hash: beaHash }) })).error, 'profile_unclaimed', 'nothing is uploaded for an unconfirmed Fortnite account');
+  ok((await dev(beaPc, 'tk_device_profile_claim', { p_player_hash: beaHash, p_label: 'BeaBuilds ★' })).ok, 'Bea confirms her Fortnite account');
+  eq((await dev(calPc, 'tk_device_profile_claim', { p_player_hash: beaHash, p_label: 'not me' })).error, 'profile_conflict', "Cal's PC can't take Bea's Fortnite account");
+  eq((await dev(calPc, 'tk_device_import', { p_match: matchPayload({ hash: beaHash }) })).error, 'profile_conflict', "...or upload Bea's matches");
+  ok((await dev(calPc, 'tk_device_profile_claim', { p_player_hash: calHash })).ok, 'Cal claims his own');
+  ok((await dev(deePc, 'tk_device_profile_claim', { p_player_hash: deeHash })).ok, 'Dee claims hers');
+  const prof = (await call(bea, 'tk_pc_tracking_state')).profiles;
+  eq(prof.map((p) => p.label), ['BeaBuilds ★'], 'profile listed on the website with its label');
+  eq((await dev(beaPc, 'tk_device_profile_claim', { p_player_hash: 'nothex' })).error, 'invalid', 'bad hash refused');
+  const spare = playerHash();
+  ok((await dev(beaPc, 'tk_device_profile_claim', { p_player_hash: spare })).ok, 'a second Fortnite account for Bea');
+  ok((await call(bea, 'tk_replay_profile_unlink', { p_player_hash: spare })).ok, 'unlinked from the website');
+  ok((await dev(calPc, 'tk_device_profile_claim', { p_player_hash: spare })).ok, 'an unlinked Fortnite account can be claimed elsewhere');
+});
+
+let beaMatch;
+await section('replay imports: idempotent, validated, never double counted', async () => {
+  const p = matchPayload({ hash: beaHash, chests: 37 });
+  const a = await dev(beaPc, 'tk_device_import', { p_match: p });
+  ok(a.ok && a.status === 'created', 'one finished match imported');
+  eq(a.match.chests, 37, 'with its chest count');
+  beaMatch = a.match;
+  eq((await dev(beaPc, 'tk_device_import', { p_match: p })).status, 'unchanged', 'the same match again is recognised (retry)');
+  eq((await sql(`select count(*)::int n from tk_replay_matches where account_id = $1`, [bea.id]))[0].n, 1, 'still one record');
+  const lst = await call(bea, 'tk_replay_matches', {});
+  eq(lst.matches.length, 1, 'the website sees it');
+  eq(lst.matches[0].chest_times.length, 37, 'with one time per chest');
+  // a newer parser corrects the count; the old result is kept for audit
+  const v2 = await dev(beaPc, 'tk_device_import', { p_match: { ...p, parser_version: '1.1.0', chests: 38, chest_times: [...p.chest_times, 900], breakdown: { regular: 38 } } });
+  eq(v2.status, 'updated', 'newer parser result replaces the old one');
+  eq(v2.match.chests, 38, 'new count');
+  eq(v2.match.revisions, 1, 'previous result kept');
+  eq((await dev(beaPc, 'tk_device_import', { p_match: p })).status, 'unchanged', 'an older companion cannot undo it');
+  // the player's own correction wins over any later parser
+  const cor = await call(bea, 'tk_replay_correct', { p_match: a.match.id, p_chests: 40, p_reason: 'two chests behind a wall' });
+  ok(cor.ok && cor.match.chests === 40 && cor.match.replay_chests === 38, 'corrected count, replay count kept');
+  const v3 = await dev(beaPc, 'tk_device_import', { p_match: { ...p, parser_version: '1.2.0', chests: 39, chest_times: [...p.chest_times, 900, 950], breakdown: { regular: 39 } } });
+  eq(v3.status, 'updated_kept_correction', 'parser update stored...');
+  ok(v3.match.chests === 40 && v3.match.replay_chests === 39, '...but the correction stays');
+  eq((await call(bea, 'tk_replay_correct', { p_match: a.match.id, p_chests: null })).match.chests, 39, 'clearing the correction');
+  eq((await call(cal, 'tk_replay_correct', { p_match: a.match.id, p_chests: 1 })).error, 'not_found', "nobody else can correct it");
+  // validation
+  const bad = async (over, why) => eq((await dev(beaPc, 'tk_device_import', { p_match: { ...matchPayload({ hash: beaHash }), ...over } })).detail, why, 'rejected: ' + why);
+  await bad({ chests: 999, chest_times: [] }, 'chests');
+  await bad({ chests: 3 }, 'chest_times');
+  await bad({ chest_times: Array(37).fill(99999) }, 'chest_times');
+  await bad({ started_at: nowIso(3600e3), ended_at: nowIso(4000e3) }, 'times');
+  await bad({ ended_at: nowIso(-50 * MIN) }, 'times');
+  await bad({ session_id: null, replay_guid: null }, 'no_match_id');
+  await bad({ session_id: "x'; drop table--" }, 'session_id');
+  await bad({ parser_version: '0.9.0' }, 'parser_outdated');
+  await bad({ breakdown: { a: 1, b: 1, c: 1, d: 1, e: 1, f: 1, g: 1, h: 1, i: 1, j: 1, k: 1, l: 1, m: 1, n: 1, o: 1, p: 1, q: 1 } }, 'breakdown');
+  // nothing from before this season (no Pirate Token back then), not even as history
+  await bad({ started_at: '2026-10-31T23:00:00Z', ended_at: '2026-10-31T23:20:00Z' }, 'before_season');
+  await bad({ started_at: '2026-10-31T23:00:00Z', ended_at: '2026-10-31T23:20:00Z', historical: true }, 'before_season');
+  eq((await dev(beaPc, 'tk_device_hello')).season_start.slice(0, 19), '2026-11-01T04:00:00', 'the PC learns the season start (Nov 1, 2026, 12:00 AM Eastern)');
+  // the recording first seen without a match id is upgraded in place, not duplicated
+  const guid = hex(16), sess = 'S' + hex(12);
+  const n1 = await dev(beaPc, 'tk_device_import', { p_match: matchPayload({ hash: beaHash, session: null, guid, start: Date.now() - 300 * MIN }) });
+  ok(n1.match.match_key.startsWith('rg:') && !n1.match.has_match_id, 'stored under its replay id');
+  const n2 = await dev(beaPc, 'tk_device_import', { p_match: matchPayload({ hash: beaHash, session: sess, guid, start: Date.now() - 300 * MIN, parser: '1.2.1' }) });
+  ok(n2.match.id === n1.match.id && n2.match.match_key === 'fn:' + sess.toLowerCase(), 'same record, now with the match id');
+  // reinstalling: a brand-new link of the same account recognises what is already there
+  const re = await linkPc(bea, '198.51.100.11', 'Reinstalled');
+  eq((await dev(re, 'tk_device_import', { p_match: p })).status, 'unchanged', 'reinstalled companion re-sending history adds nothing');
+  eq((await dev(re, 'tk_device_matches')).matches.length, 2, 'and can list what TOKENIFY already has');
+  await call(bea, 'tk_device_revoke', { p_device: re.id });
+  // two PCs, two friends: separate records
+  const c1 = await dev(calPc, 'tk_device_import', { p_match: matchPayload({ hash: calHash, chests: 12, start: Date.now() - 400 * MIN }) });
+  ok(c1.ok && c1.status === 'created', "Cal's match");
+  eq((await call(bea, 'tk_replay_matches', {})).matches.length, 2, "Bea doesn't see Cal's matches");
+  eq((await call(cal, 'tk_replay_matches', {})).matches.length, 1, 'Cal sees his own');
+  await throws(asRole(db, bea, `select * from public.tk_replay_matches`), /permission denied/i, 'no direct table reads');
+  await throws(asRole(db, anon, `select * from public.tk_devices`), /permission denied/i, 'devices hidden from visitors');
+  await throws(call(anon, 'tk_replay_matches', {}), /permission denied/i, 'match history needs a session');
+});
+
+await section('replay imports: inferred sessions, history, offline catch-up, exclusion', async () => {
+  const base = Date.now() - 900 * MIN;
+  const m1 = await dev(deePc, 'tk_device_import', { p_match: matchPayload({ hash: deeHash, start: base, end: base + 20 * MIN }) });
+  const m2 = await dev(deePc, 'tk_device_import', { p_match: matchPayload({ hash: deeHash, start: base + 32 * MIN, end: base + 50 * MIN }) });
+  const m3 = await dev(deePc, 'tk_device_import', { p_match: matchPayload({ hash: deeHash, start: base + 200 * MIN, end: base + 220 * MIN }) });
+  eq(m1.match.auto_session, m2.match.auto_session, 'matches 12 minutes apart share an inferred session');
+  ok(m3.match.auto_session !== m2.match.auto_session, 'a match hours later starts a new one');
+  // a PC that was offline uploads later, out of order: grouping still holds
+  const m0 = await dev(deePc, 'tk_device_import', { p_match: matchPayload({ hash: deeHash, start: base - 25 * MIN, end: base - 5 * MIN }) });
+  eq(m0.match.auto_session, m1.match.auto_session, 'a late upload joins the session it belongs to');
+  const h = await dev(deePc, 'tk_device_import', { p_match: matchPayload({ hash: deeHash, start: base - 600 * MIN, end: base - 580 * MIN, historical: true }) });
+  ok(h.match.historical && ![m0, m1, m2, m3].some((m) => m.match.auto_session === h.match.auto_session), 'back-filled history never joins live sessions');
+  await call(dee, 'tk_tracking_settings', { p_auto_gap: 10 });
+  const m4 = await dev(deePc, 'tk_device_import', { p_match: matchPayload({ hash: deeHash, start: base + 232 * MIN, end: base + 250 * MIN }) });
+  ok(m4.match.auto_session !== m3.match.auto_session, 'the grouping gap is the player\'s setting (10 min here)');
+  eq((await call(dee, 'tk_tracking_settings', { p_auto_gap: 2 })).error, 'invalid_gap', 'gap limits');
+  eq((await call(dee, 'tk_tracking_settings', { p_mode: 'robot' })).error, 'invalid_mode', 'mode limits');
+  const ex = await call(dee, 'tk_replay_exclude', { p_match: m4.match.id, p_excluded: true });
+  ok(ex.ok && ex.match.excluded, '"not my match" excludes it');
+  eq((await call(dee, 'tk_pc_tracking_state')).matches, 5, 'excluded matches are not counted');
+  eq((await call(dee, 'tk_replay_exclude', { p_match: m4.match.id, p_excluded: false })).match.excluded, false, 'and can be included again');
+  const since = (await call(dee, 'tk_replay_matches', {})).matches.at(-1).updated_at;
+  const delta = await call(dee, 'tk_replay_matches', { p_since: since });
+  ok(delta.matches.length >= 1 && delta.matches.every((m) => m.updated_at >= since), 'incremental fetch returns only changes');
+  ok((await dev(deePc, 'tk_device_import', { p_match: matchPayload({ hash: deeHash, start: Date.parse('2026-11-01T04:05:00Z'), end: Date.parse('2026-11-01T04:25:00Z'), chests: 3, historical: true }) })).ok,
+    'a match just after the season start counts');
+  // tidy up so the squad test below starts clean
+  await sql(`delete from tk_replay_matches where account_id = $1`, [dee.id]);
+  await call(dee, 'tk_tracking_settings', { p_auto_gap: 30 });
+});
+
+await section('mixed squad: one Switch player counting by hand + three PCs on replays', async () => {
+  // Sam (Switch 2, manual) leads; Bea, Cal and Dee play on PC with the companion
+  await call(sam, 'tk_party_create');
+  const code = (await call(sam, 'tk_party_code_create')).code;
+  for (const p of [bea, cal, dee]) ok((await call(p, 'tk_party_join_code', { p_code: code })).ok, 'joined by code');
+  const g0 = (await call(sam, 'tk_party_game_start')).party.game;
+  const gid = g0.id;
+  const src = Object.fromEntries(g0.members.map((m) => [m.username, m.source]));
+  eq(sorted(src), sorted({ Switch_Sam: 'live', Pc_Bea: 'replay', Pc_Cal: 'replay', Pc_Dee: 'replay' }), 'how each member is counted');
+  await sql(`update tk_party_games set started_at = now() - interval '19 minutes' where id = $1`, [gid]);
+  for (let i = 0; i < 38; i++) await call(sam, 'tk_party_chest_add', { p_event_id: uuid(), p_opened_at: nowIso() });
+  let g = (await call(bea, 'tk_party_state')).party.game;
+  eq(g.known_total, 38, 'only known chests are totalled');
+  eq(g.pending_count, 3, 'three players awaiting their replay');
+  ok(g.members.filter((m) => m.pending).every((m) => m.chests === null && m.replay_state === 'awaiting'), 'pending players are not shown as zero');
+  eq(g.completeness, 'pending', 'the squad total is not final');
+  await call(sam, 'tk_party_game_end', { p_game: gid });
+  await sql(`update tk_party_games set ended_at = now() - interval '1 minute' where id = $1`, [gid]);
+  await dev(calPc, 'tk_device_hello', { p_status: { state: 'processing' } });
+  g = (await call(sam, 'tk_party_state')).party.last_game;
+  eq(g.members.find((m) => m.username === 'Pc_Cal').replay_state, 'processing', 'a PC reading its replay shows as processing');
+  // the three replays arrive, all from the same Fortnite match
+  const match = 'S' + hex(12), start = Date.now() - 20 * MIN, end = Date.now() - 2 * MIN;
+  const rb = await dev(beaPc, 'tk_device_import', { p_match: matchPayload({ hash: beaHash, chests: 42, session: match, start, end }) });
+  eq(rb.match.party.link, 'time-window', 'first replay tied to the squad game by membership + time');
+  g = (await call(sam, 'tk_party_state')).party.last_game;
+  eq([g.known_total, g.pending_count], [80, 2], '80 known chests, 2 players pending');
+  const rc = await dev(calPc, 'tk_device_import', { p_match: matchPayload({ hash: calHash, chests: 35, session: match, start: start + 5e3, end }) });
+  const rd = await dev(deePc, 'tk_device_import', { p_match: matchPayload({ hash: deeHash, chests: 47, session: match, start: start + 9e3, end }) });
+  ok(rc.match.party.link === 'match-id' && rd.match.party.link === 'match-id', 'teammates tied by the shared Fortnite match id');
+  g = (await call(sam, 'tk_party_state')).party.last_game;
+  const by = Object.fromEntries(g.members.map((m) => [m.username, [m.chests, m.source]]));
+  eq(sorted(by), sorted({ Switch_Sam: [38, 'live'], Pc_Bea: [42, 'replay'], Pc_Cal: [35, 'replay'], Pc_Dee: [47, 'replay'] }), 'each contribution with its owner and source');
+  eq([g.known_total, g.pending_count, g.completeness], [162, 0, 'complete'], 'TOTAL SQUAD CHESTS 162, complete');
+  eq((await sql(`select count(*)::int n from tk_party_games where party_id = $1`, [g.party_id]))[0].n, 1, 'three uploads, one shared game');
+  eq((await dev(calPc, 'tk_device_import', { p_match: matchPayload({ hash: calHash, chests: 35, session: match, start: start + 5e3, end, guid: null }) })).status, 'unchanged', "Cal's companion retrying adds nothing");
+  eq((await call(sam, 'tk_party_state')).party.last_game.known_total, 162, 'still 162');
+  // a correction flows into the squad total; leaving keeps contributions
+  const sig = (await sql(`select version from tk_party_signals where party_id = $1`, [g.party_id]))[0].version;
+  await call(dee, 'tk_replay_correct', { p_match: rd.match.id, p_chests: 48, p_reason: 'missed one' });
+  eq((await call(sam, 'tk_party_state')).party.last_game.known_total, 163, 'correction updates the squad total');
+  ok((await sql(`select version from tk_party_signals where party_id = $1`, [g.party_id]))[0].version > sig, 'and pushes a live update');
+  const hist = await call(sam, 'tk_party_history', {});
+  eq([hist.stats.linked.games, hist.stats.linked.chests], [1, 163], 'linked squad stats use replay counts');
+  ok((await call(cal, 'tk_party_leave')).ok, 'Cal leaves the party');
+  eq((await call(sam, 'tk_party_history', {})).games[0].members.find((m) => m.username === 'Pc_Cal').chests, 35, "Cal's contribution stays with that game");
+  ok((await call(cal, 'tk_party_join_code', { p_code: code })).ok, 'Cal rejoins');
+});
+
+await section('squad replays: hybrid, missing, conflicts, manual linking', async () => {
+  const partyId = (await call(sam, 'tk_party_state')).party.id;
+  await sql(`update tk_party_games set started_at = started_at - interval '2 hours', ended_at = ended_at - interval '2 hours' where party_id = $1`, [partyId]);
+  // Bea switches to hybrid: she counts live, her replay then replaces the live count (kept for reference)
+  await call(bea, 'tk_tracking_settings', { p_mode: 'hybrid' });
+  const g1 = (await call(sam, 'tk_party_game_start')).party.game.id;
+  await sql(`update tk_party_games set started_at = now() - interval '19 minutes' where id = $1`, [g1]);
+  for (let i = 0; i < 10; i++) await call(bea, 'tk_party_chest_add', { p_event_id: uuid(), p_opened_at: nowIso() });
+  let g = (await call(sam, 'tk_party_state')).party.game;
+  const bLive = g.members.find((m) => m.username === 'Pc_Bea');
+  ok(bLive.source === 'live' && bLive.chests === 10, 'hybrid player counts live during the game');
+  // this replay has no Fortnite match id (only its recording id), so it is tied by membership + time
+  const first = await dev(beaPc, 'tk_device_import', { p_match: matchPayload({ hash: beaHash, chests: 12, session: null, start: Date.now() - 20 * MIN, end: Date.now() - MIN }) });
+  eq(first.match.party.link, 'time-window', 'tied to the running squad game');
+  g = (await call(sam, 'tk_party_state')).party.game;
+  const bRep = g.members.find((m) => m.username === 'Pc_Bea');
+  ok(bRep.chests === 12 && bRep.live_chests === 10 && bRep.source === 'replay', 'replay replaces her live count; never 10 + 12');
+  // a different recording overlapping the same squad game is flagged for the player, never added
+  const dup = await dev(beaPc, 'tk_device_import', { p_match: matchPayload({ hash: beaHash, chests: 9, session: null, start: Date.now() - 15 * MIN, end: Date.now() - 30e3 }) });
+  eq(dup.match.party.link, 'conflict', 'a second replay for the same squad game needs confirming');
+  eq((await call(sam, 'tk_party_state')).party.game.members.find((m) => m.username === 'Pc_Bea').chests, 12, 'and changes nothing on its own');
+  // the earlier squad game (now 2 hours back) is tied to one Fortnite match id; a replay of another match
+  // in that same time window is not linked to it
+  const other = await dev(beaPc, 'tk_device_import', { p_match: matchPayload({ hash: beaHash, chests: 4, session: 'S' + hex(12), start: Date.now() - 138 * MIN, end: Date.now() - 122 * MIN }) });
+  eq(other.match.party, null, 'a replay of a different Fortnite match is never tied to a game by time alone');
+  const cand = await call(bea, 'tk_replay_party_candidates', { p_match: dup.match.id });
+  ok(cand.games.some((x) => x.id === g1 && x.other_replay), 'candidates show the squad game already has a replay');
+  eq((await call(bea, 'tk_replay_attach', { p_match: dup.match.id, p_game: g1 })).error, 'slot_taken', 'replacing needs an explicit choice');
+  ok((await call(bea, 'tk_replay_attach', { p_match: dup.match.id, p_game: g1, p_replace: true })).ok, 'player picks the right match');
+  eq((await call(sam, 'tk_party_state')).party.game.members.find((m) => m.username === 'Pc_Bea').chests, 9, 'now that one counts');
+  ok((await call(bea, 'tk_replay_detach', { p_match: dup.match.id })).ok, 'and can be unlinked');
+  eq((await call(cal, 'tk_replay_attach', { p_match: dup.match.id, p_game: g1 })).error, 'not_found', "nobody else can link Bea's match");
+  // Dee's replay never comes: pending, then missing (unknown, not zero), then she can use her live count
+  await call(sam, 'tk_party_game_end', { p_game: g1 });
+  await sql(`update tk_party_games set started_at = now() - interval '70 minutes', ended_at = now() - interval '50 minutes' where id = $1`, [g1]);
+  await dev(calPc, 'tk_device_hello', { p_status: { state: 'waiting' } });   // Cal's PC finished processing earlier
+  g = (await call(sam, 'tk_party_history', {})).games.find((x) => x.id === g1);
+  const dRow = g.members.find((m) => m.username === 'Pc_Dee');
+  ok(dRow.missing && dRow.chests === null, 'a replay that never arrived is "missing", not zero');
+  eq(g.completeness, 'partial', 'the game is marked incomplete');
+  ok((await call(dee, 'tk_party_use_live_count', { p_game: g1 })).ok, 'Dee chooses her live count instead');
+  eq((await call(sam, 'tk_party_history', {})).games.find((x) => x.id === g1).members.find((m) => m.username === 'Pc_Dee').chests, 0, 'counted as what she tracked live');
+  // matches outside any squad game stay personal; manual-mode accounts are never auto-linked
+  const solo = await dev(calPc, 'tk_device_import', { p_match: matchPayload({ hash: calHash, chests: 5, start: Date.now() - 600 * MIN }) });
+  eq(solo.match.party, null, 'a solo match is not tied to any squad game');
+  await call(cal, 'tk_tracking_settings', { p_mode: 'manual' });
+  const g2 = (await call(sam, 'tk_party_game_start')).party.game;
+  eq(g2.members.find((m) => m.username === 'Pc_Cal').source, 'live', 'manual mode: counted live in new squad games');
+  await sql(`update tk_party_games set started_at = now() - interval '19 minutes' where id = $1`, [g2.id]);
+  const man = await dev(calPc, 'tk_device_import', { p_match: matchPayload({ hash: calHash, chests: 7, start: Date.now() - 20 * MIN, end: Date.now() - MIN }) });
+  eq(man.match.party, null, 'manual mode: replays are stored but not added to squad games');
+  await call(sam, 'tk_party_game_end', { p_game: g2.id });
+  const hist = await dev(deePc, 'tk_device_import', { p_match: matchPayload({ hash: deeHash, chests: 3, historical: true, start: Date.now() - 20 * MIN, end: Date.now() - MIN }) });
+  eq(hist.match.party, null, 'back-filled history is never added to squad games');
+});
+
+await section('companion disconnect and housekeeping', async () => {
+  const tmp = await linkPc(dee, '198.51.100.40', 'Temp');
+  ok((await dev(tmp, 'tk_device_disconnect')).ok, 'companion can disconnect itself');
+  eq((await dev(tmp, 'tk_device_hello')).error, 'device_revoked', 'and stays disconnected');
+  ok((await dev(tmp, 'tk_device_disconnect')).ok, 'disconnecting twice is harmless');
+  await call(dee, 'tk_device_pair_start');
+  await sql(`update tk_device_pairings set expires_at = now() - interval '2 days' where account_id = $1 and used_at is null`, [dee.id]);
+  await sql(`select tkp.cleanup()`);
+  eq((await sql(`select count(*)::int n from tk_device_pairings where account_id = $1 and used_at is null`, [dee.id]))[0].n, 0, 'expired pairing codes cleaned up');
+});
+
 await section('account deletion keeps shared history anonymous', async () => {
   const before = (await call(frank, 'tk_party_history', {})).stats;
   eq((await call(gina, 'tk_account_delete', { p_password: 'wrong wrong' })).error, 'bad_password', 'needs the password');

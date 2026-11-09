@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      The assembly name must contain "ReplayReader": Unreal.Core only scans assemblies whose name contains
+      that string for [PlayerController] / export-group attributes.
+    -->
+    <AssemblyName>Tokenify.ReplayReader</AssemblyName>
+    <RootNamespace>Tokenify.ReplayReader</RootNamespace>
+    <Description>Reads completed Fortnite replay files and finds the chests opened by the player who recorded them.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\lib\Unreal.Core\Unreal.Core.csproj" />
+    <ProjectReference Include="..\..\lib\Unreal.Encryption\Unreal.Encryption.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\registry\chest-registry.json" LogicalName="Tokenify.ReplayReader.chest-registry.json" />
+  </ItemGroup>
+
+</Project>

@@ -25,6 +25,12 @@
   function gChests(g) { return (g.ts ? g.ts.length : (g.archived || 0)) + (g.adj || 0); }
   var RANK = { active: 0, paused: 1, completed: 2, incomplete: 2, void: 3 };
   function pickGame(a, b) {
+    // A game built from a replay import: the copy made from the newest server data (or the latest choice) wins.
+    if (a.replay || b.replay) {
+      var ka = a.replay ? String(a.replay.v || '') + '|' + String(a.replay.decidedAt || 0).padStart(15, '0') : '';
+      var kb = b.replay ? String(b.replay.v || '') + '|' + String(b.replay.decidedAt || 0).padStart(15, '0') : '';
+      if (ka !== kb) { var w = clone(kb > ka ? b : a); w.chests = gChests(w); return w; }
+    }
     var la = a.ts ? a.ts.length : (a.archived || 0), lb = b.ts ? b.ts.length : (b.archived || 0);
     var base = lb > la ? b : a; // more recorded chests wins (one is a prefix of the other in practice)
     var out = clone(base);

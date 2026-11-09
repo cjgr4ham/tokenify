@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Self-contained test runner (no test framework download needed). After a build:
+      Tokenify.Tests.exe test [fixtures-folder]       runs every test
+      Tokenify.Tests.exe scan [file-or-folder] [-v]   prints what the parser finds in replays
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>Tokenify.Tests</AssemblyName>
+    <RootNamespace>Tokenify.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Tokenify.ReplayReader\Tokenify.ReplayReader.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\fixtures\expected.json" Link="fixtures-expected.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\registry\chest-registry.json" Link="chest-registry.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

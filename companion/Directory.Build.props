@@ -1,0 +1,16 @@
+<Project>
+  <!-- Shared settings for every TOKENIFY Companion project. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Deterministic>true</Deterministic>
+    <Company>TOKENIFY</Company>
+    <Copyright>TOKENIFY Companion contributors. GPL-3.0-or-later.</Copyright>
+    <!-- Reproducible builds: no machine paths in the binaries. -->
+    <PathMap>$(MSBuildThisFileDirectory)=/tokenify-companion/</PathMap>
+    <DebugType>embedded</DebugType>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+</Project>

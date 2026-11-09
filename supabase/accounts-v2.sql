@@ -15,6 +15,10 @@
 --   * Every table has row-level security and no direct client access, except two tiny "signal" tables
 --     (version counters used to push live updates). The browser can only call the tk_* functions below,
 --     and each one checks the caller's session and permissions itself.
+--   * Automatic PC tracking: the Windows app (TOKENIFY Companion) is linked once with a 10-minute pairing code
+--     and then signs its requests with a device secret (hashed here, rotated every 30 days, revocable). It sends
+--     one small summary per finished Fortnite match: chest count and times, match id, a hash of the Fortnite
+--     account id. Never the replay file, other players' data, or anything else from the PC.
 -- =====================================================================================================
 
 create extension if not exists pgcrypto with schema extensions;
@@ -229,6 +233,105 @@ create table if not exists public.tk_tracker_state (
   updated_at timestamptz not null default now()
 );
 
+-- Automatic PC tracking. A Windows companion (TOKENIFY Companion) is linked to an account with a one-time
+-- pairing code and from then on authenticates with its own device secret (stored here only as a hash). It reads
+-- the replay Fortnite saves after each match and sends one compact summary per match: never the replay itself.
+create table if not exists public.tk_devices (
+  id                  uuid primary key default gen_random_uuid(),
+  account_id          uuid not null references public.tk_accounts (id) on delete cascade,
+  name                text not null default 'Windows PC',
+  secret_hash         bytea not null,
+  next_secret_hash    bytea,                         -- secret rotation: issued, not used by the companion yet
+  secret_issued_at    timestamptz not null default now(),
+  app_version         text,
+  status              jsonb not null default '{}'::jsonb,
+  status_at           timestamptz,
+  rescan_requested_at timestamptz,
+  created_at          timestamptz not null default now(),
+  last_seen_at        timestamptz,
+  last_sync_at        timestamptz,
+  revoked_at          timestamptz,
+  constraint tk_devices_name_len check (char_length(name) between 1 and 40)
+);
+create index if not exists tk_devices_account on public.tk_devices (account_id) where revoked_at is null;
+
+create table if not exists public.tk_device_pairings (
+  id         uuid primary key default gen_random_uuid(),
+  account_id uuid not null references public.tk_accounts (id) on delete cascade,
+  code_hash  bytea not null unique,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null default now() + interval '10 minutes',
+  used_at    timestamptz,
+  device_id  uuid references public.tk_devices (id) on delete set null
+);
+create index if not exists tk_device_pairings_account on public.tk_device_pairings (account_id);
+
+-- Fortnite accounts a TOKENIFY account counts chests for, as SHA-256 hashes of the Epic account id (never the
+-- id itself). One Fortnite account belongs to one TOKENIFY account, so a shared PC can't send one player's chests
+-- to someone else.
+create table if not exists public.tk_replay_profiles (
+  player_hash   text primary key check (player_hash ~ '^[0-9a-f]{64}$'),
+  account_id    uuid not null references public.tk_accounts (id) on delete cascade,
+  label         text check (label is null or char_length(label) <= 40),
+  device_id     uuid references public.tk_devices (id) on delete set null,
+  created_at    timestamptz not null default now(),
+  last_match_at timestamptz
+);
+create index if not exists tk_replay_profiles_account on public.tk_replay_profiles (account_id);
+
+-- One record per Fortnite match per player. match_key is "fn:<Fortnite match session id>" (the same for everyone
+-- in that match) or, if the replay had none, "rg:<replay id>". Importing the same match again never adds it twice.
+create table if not exists public.tk_replay_matches (
+  id                uuid primary key default gen_random_uuid(),
+  account_id        uuid not null references public.tk_accounts (id) on delete cascade,
+  device_id         uuid references public.tk_devices (id) on delete set null,
+  player_hash       text not null,
+  match_key         text not null,
+  replay_guid       text,
+  session_id        text,
+  started_at        timestamptz not null,
+  ended_at          timestamptz not null,
+  build             text,
+  parser_version    text not null,
+  registry_version  integer not null,
+  chests            integer not null check (chests between 0 and 400),   -- replay-derived (latest parser)
+  breakdown         jsonb not null default '{}'::jsonb,
+  chest_times       jsonb not null default '[]'::jsonb,                    -- seconds since the match started
+  partial           boolean not null default false,                        -- sent anyway although not fully readable
+  corrected_chests  integer check (corrected_chests is null or corrected_chests between 0 and 400),
+  correction_reason text,
+  corrected_at      timestamptz,
+  excluded          boolean not null default false,                        -- "not my match": counts nowhere
+  historical        boolean not null default false,                        -- back-filled from old replays
+  auto_session      uuid not null,                                         -- inferred session (matches close together)
+  party_game_id     uuid references public.tk_party_games (id) on delete set null,
+  party_link        text check (party_link is null or party_link in ('match-id', 'time-window', 'confirmed', 'ambiguous', 'conflict', 'detached')),
+  imported_at       timestamptz not null default now(),
+  updated_at        timestamptz not null default now(),
+  revisions         jsonb not null default '[]'::jsonb,                    -- earlier results and corrections (audit)
+  unique (account_id, match_key)
+);
+create index if not exists tk_replay_matches_account_time on public.tk_replay_matches (account_id, started_at desc);
+create index if not exists tk_replay_matches_account_updated on public.tk_replay_matches (account_id, updated_at);
+create index if not exists tk_replay_matches_session on public.tk_replay_matches (session_id) where session_id is not null;
+
+-- Squad games: how each member's chests are counted ('live' as they happen, or 'replay' after the match) and the
+-- replay result that replaced the live count. A pending replay is shown as pending, never as zero.
+alter table public.tk_party_games add column if not exists match_session_id text;
+alter table public.tk_party_game_members add column if not exists tracking text not null default 'live';
+alter table public.tk_party_game_members add column if not exists replay_match_id uuid;
+alter table public.tk_party_game_members add column if not exists replay_chests integer;
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'tk_party_game_members_tracking') then
+    alter table public.tk_party_game_members add constraint tk_party_game_members_tracking check (tracking in ('live', 'replay'));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'tk_party_game_members_replay_fk') then
+    alter table public.tk_party_game_members add constraint tk_party_game_members_replay_fk
+      foreign key (replay_match_id) references public.tk_replay_matches (id) on delete set null;
+  end if;
+end $$;
+
 -- Row-level security everywhere; the client gets no direct table access at all...
 do $$
 declare t text;
@@ -236,7 +339,8 @@ begin
   foreach t in array array['tk_accounts', 'tk_sessions', 'tk_recovery_codes', 'tk_rate_events', 'tk_presence',
     'tk_account_signals', 'tk_party_signals', 'tk_friend_requests', 'tk_friendships', 'tk_blocks', 'tk_parties',
     'tk_party_members', 'tk_party_invites', 'tk_party_games', 'tk_party_game_members', 'tk_chest_events',
-    'tk_party_game_teammates', 'tk_corrections', 'tk_tracker_state'] loop
+    'tk_party_game_teammates', 'tk_corrections', 'tk_tracker_state', 'tk_devices', 'tk_device_pairings',
+    'tk_replay_profiles', 'tk_replay_matches'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('revoke all on public.%I from anon, authenticated', t);
   end loop;
@@ -474,6 +578,301 @@ begin
   delete from auth.users u where coalesce(u.is_anonymous, false) and u.created_at < now() - interval '1 day'
      and not exists (select 1 from public.tk_sessions s where s.auth_uid = u.id);
   update public.tk_party_invites set status = 'expired' where status = 'pending' and expires_at < now();
+  delete from public.tk_device_pairings where expires_at < now() - interval '1 day';
+end $$;
+
+-- ------------------------------------------------------------------- automatic PC tracking helpers
+create or replace function tkp.random_secret() returns text
+language sql volatile set search_path = '' as $$
+  select translate(encode(extensions.gen_random_bytes(32), 'base64'), '+/=', '-_')   -- 256 bits, URL-safe
+$$;
+
+create or replace function tkp.secret_hash(p_secret text) returns bytea
+language sql immutable set search_path = '' as $$
+  select extensions.digest('tokenify-device:' || coalesce(p_secret, ''), 'sha256')
+$$;
+
+-- Like clean_text but keeps non-ASCII letters (Fortnite names can use them); strips control characters only.
+create or replace function tkp.clean_label(p_text text, p_max integer) returns text
+language sql immutable set search_path = '' as $$
+  select nullif(left(btrim(regexp_replace(coalesce(p_text, ''), '[[:cntrl:]]', '', 'g')), p_max), '')
+$$;
+
+create or replace function tkp.version_num(p_version text) returns bigint
+language sql immutable set search_path = '' as $$
+  select case when p_version ~ '^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$'
+              then split_part(p_version, '.', 1)::bigint * 100000000 + split_part(p_version, '.', 2)::bigint * 10000
+                   + split_part(p_version, '.', 3)::bigint end
+$$;
+
+-- Checks a companion's device id + secret. Using the "next" secret completes a rotation.
+create or replace function tkp.device_check(p_device uuid, p_secret text, out device_id uuid, out account_id uuid, out problem text)
+language plpgsql security definer set search_path = '' as $$
+declare d record; h bytea;
+begin
+  problem := 'device_unknown';
+  if p_device is null or p_secret is null or char_length(p_secret) not between 32 and 128 then return; end if;
+  h := tkp.secret_hash(p_secret);
+  select x.id, x.account_id, x.secret_hash, x.next_secret_hash, x.revoked_at into d from public.tk_devices x where x.id = p_device for update;
+  if d.id is null or (d.secret_hash <> h and d.next_secret_hash is distinct from h) then return; end if;
+  if d.revoked_at is not null then problem := 'device_revoked'; return; end if;
+  if d.secret_hash = h then
+    update public.tk_devices set last_seen_at = now() where id = d.id;
+  else
+    update public.tk_devices set secret_hash = h, next_secret_hash = null, secret_issued_at = now(), last_seen_at = now() where id = d.id;
+  end if;
+  device_id := d.id;
+  account_id := d.account_id;
+  problem := null;
+end $$;
+
+-- Gate for every companion request: failed-secret throttling per IP, the device check, then a per-device budget.
+create or replace function tkp.device_gate(p_device uuid, p_secret text, p_bucket text, p_max integer, p_window interval,
+  out device_id uuid, out account_id uuid, out err jsonb)
+language plpgsql security definer set search_path = '' as $$
+declare v_ip text := coalesce(tkp.client_ip(), 'unknown'); c record;
+begin
+  if tkp.rate_count('devfail:' || v_ip, interval '10 minutes') >= 30 then
+    err := jsonb_build_object('ok', false, 'error', 'rate_limited');
+    return;
+  end if;
+  select * into c from tkp.device_check(p_device, p_secret);
+  if c.problem is not null then
+    insert into public.tk_rate_events (bucket) values ('devfail:' || v_ip);
+    err := jsonb_build_object('ok', false, 'error', c.problem);
+    return;
+  end if;
+  if p_bucket is not null and not tkp.rate_take(p_bucket || ':' || c.device_id, p_max, p_window) then
+    err := jsonb_build_object('ok', false, 'error', 'rate_limited');
+    return;
+  end if;
+  device_id := c.device_id;
+  account_id := c.account_id;
+end $$;
+
+-- 'manual' (counted by hand), 'auto' (replays only) or 'hybrid' (by hand, then checked against the replay).
+create or replace function tkp.tracking_mode(p_account uuid) returns text
+language sql stable security definer set search_path = '' as $$
+  select coalesce(nullif(a.settings ->> 'tracking', ''), 'manual') from public.tk_accounts a where a.id = p_account
+$$;
+
+-- How a member's chests are counted in a squad game: 'replay' when they rely on automatic PC tracking (the
+-- result arrives after the match), otherwise 'live'.
+create or replace function tkp.member_tracking(p_account uuid) returns text
+language sql stable security definer set search_path = '' as $$
+  select case when tkp.tracking_mode(p_account) = 'auto'
+               and exists (select 1 from public.tk_devices d where d.account_id = p_account and d.revoked_at is null
+                             and coalesce(d.last_seen_at, d.created_at) > now() - interval '30 days')
+              then 'replay' else 'live' end
+$$;
+
+create or replace function tkp.auto_gap(p_account uuid) returns interval
+language sql stable security definer set search_path = '' as $$
+  select make_interval(mins => least(greatest(coalesce((a.settings ->> 'auto_gap')::integer, 30), 5), 240))
+    from public.tk_accounts a where a.id = p_account
+$$;
+
+create or replace function tkp.revisions_push(p_list jsonb, p_item jsonb) returns jsonb
+language sql immutable set search_path = '' as $$
+  select coalesce((select jsonb_agg(e order by n) from jsonb_array_elements(coalesce(p_list, '[]'::jsonb) || jsonb_build_array(p_item))
+                     with ordinality as x(e, n)
+                    where n > jsonb_array_length(coalesce(p_list, '[]'::jsonb)) + 1 - 20), '[]'::jsonb)
+$$;
+
+-- What a companion reports about itself, reduced to known fields.
+create or replace function tkp.device_status_clean(p jsonb) returns jsonb
+language plpgsql immutable set search_path = '' as $$
+declare v_state text; v_folder text;
+begin
+  if p is null or jsonb_typeof(p) <> 'object' then return null; end if;
+  v_state := p ->> 'state';
+  v_folder := p ->> 'folder';
+  if v_state is null or v_state not in ('waiting', 'in_match', 'processing', 'syncing', 'up_to_date', 'needs_attention', 'paused') then
+    v_state := 'waiting';
+  end if;
+  if v_folder not in ('ok', 'missing', 'empty', 'unreadable') then v_folder := null; end if;
+  return jsonb_strip_nulls(jsonb_build_object('state', v_state, 'folder', v_folder,
+    'queued', least(greatest(coalesce((p ->> 'queued')::integer, 0), 0), 100000),
+    'attention', least(greatest(coalesce((p ->> 'attention')::integer, 0), 0), 100000),
+    'last_match_chests', case when (p ->> 'last_match_chests') ~ '^[0-9]{1,3}$' then (p ->> 'last_match_chests')::integer end,
+    'last_match_at', case when (p ->> 'last_match_at') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$' then p ->> 'last_match_at' end,
+    'parser', tkp.clean_text(p ->> 'parser', 16),
+    'auto', case when jsonb_typeof(p -> 'auto') = 'boolean' then p -> 'auto' end));
+exception when others then
+  return jsonb_build_object('state', 'waiting');
+end $$;
+
+-- The Pirate Token exists from the start of this season (Chapter 7 Season 3: Nov 1, 2026, 12:00 AM Eastern).
+-- Matches from before it never count. Change this one date for a new season (then re-run this file).
+create or replace function tkp.season_start() returns timestamptz
+language sql immutable set search_path = '' as $$
+  select timestamptz '2026-11-01 04:00:00+00'
+$$;
+
+-- Validates one match summary from a companion. Returns null when acceptable, else a short reason.
+create or replace function tkp.replay_problem(m jsonb) returns text
+language plpgsql stable set search_path = '' as $$
+declare v_chests integer; v_start timestamptz; v_end timestamptz; v_registry integer; v_secs numeric;
+begin
+  if m is null or jsonb_typeof(m) <> 'object' then return 'payload'; end if;
+  if octet_length(m::text) > 20000 then return 'too_large'; end if;
+  if coalesce(m ->> 'player_hash', '') !~ '^[0-9a-f]{64}$' then return 'player_hash'; end if;
+  if (m ->> 'session_id') is not null and (m ->> 'session_id') !~ '^[A-Za-z0-9_-]{8,64}$' then return 'session_id'; end if;
+  if (m ->> 'replay_guid') is not null and (m ->> 'replay_guid') !~ '^[A-Za-z0-9-]{8,64}$' then return 'replay_guid'; end if;
+  if (m ->> 'session_id') is null and (m ->> 'replay_guid') is null then return 'no_match_id'; end if;
+  if tkp.version_num(m ->> 'parser_version') is null then return 'parser_version'; end if;
+  if tkp.version_num(m ->> 'parser_version') < tkp.version_num('1.0.0') then return 'parser_outdated'; end if;
+  begin
+    v_chests := (m ->> 'chests')::integer;
+    v_start := (m ->> 'started_at')::timestamptz;
+    v_end := (m ->> 'ended_at')::timestamptz;
+    v_registry := (m ->> 'registry_version')::integer;
+  exception when others then
+    return 'types';
+  end;
+  if v_registry is null or v_registry < 1 or v_registry > 100000 then return 'registry_version'; end if;
+  if v_chests is null or v_chests < 0 or v_chests > 400 then return 'chests'; end if;
+  if v_start is null or v_end is null or v_end < v_start or v_end - v_start > interval '3 hours' then return 'times'; end if;
+  if v_start > now() + interval '10 minutes' or v_start < now() - interval '3 years' then return 'times'; end if;
+  if v_start < tkp.season_start() then return 'before_season'; end if;   -- no Pirate Token back then
+  if jsonb_typeof(m -> 'chest_times') is distinct from 'array' or jsonb_array_length(m -> 'chest_times') <> v_chests then return 'chest_times'; end if;
+  v_secs := extract(epoch from v_end - v_start) + 120;
+  if exists (select 1 from jsonb_array_elements(m -> 'chest_times') e
+              where jsonb_typeof(e) <> 'number' or (e #>> '{}')::numeric < 0 or (e #>> '{}')::numeric > v_secs) then
+    return 'chest_times';
+  end if;
+  if (m -> 'breakdown') is not null then
+    if jsonb_typeof(m -> 'breakdown') <> 'object' then return 'breakdown'; end if;
+    if (select count(*) from jsonb_object_keys(m -> 'breakdown')) > 16 then return 'breakdown'; end if;
+    if exists (select 1 from jsonb_each(m -> 'breakdown') b
+                where b.key !~ '^[a-z]{1,16}$' or jsonb_typeof(b.value) <> 'number' or (b.value #>> '{}')::numeric not between 0 and 400) then
+      return 'breakdown';
+    end if;
+  end if;
+  if (m -> 'historical') is not null and jsonb_typeof(m -> 'historical') <> 'boolean' then return 'historical'; end if;
+  if (m -> 'partial') is not null and jsonb_typeof(m -> 'partial') <> 'boolean' then return 'partial'; end if;
+  if char_length(coalesce(m ->> 'build', '')) > 80 then return 'build'; end if;
+  return null;
+end $$;
+
+-- Inferred play session for an imported match: the session of a match that ended less than the account's gap
+-- (default 30 minutes) before it, or of one that starts less than the gap after it; otherwise a new one. Existing
+-- matches never move, so an inferred session never changes once the site has shown it.
+create or replace function tkp.auto_session_for(p_account uuid, p_start timestamptz, p_end timestamptz, p_historical boolean) returns uuid
+language plpgsql volatile security definer set search_path = '' as $$
+declare v uuid; gap interval := tkp.auto_gap(p_account);
+begin
+  select r.auto_session into v from public.tk_replay_matches r
+   where r.account_id = p_account and r.historical = p_historical
+     and r.started_at <= p_start and r.ended_at >= p_start - gap
+   order by r.started_at desc limit 1;
+  if v is null then
+    select r.auto_session into v from public.tk_replay_matches r
+     where r.account_id = p_account and r.historical = p_historical
+       and r.started_at >= p_start and r.started_at <= p_end + gap
+     order by r.started_at limit 1;
+  end if;
+  return coalesce(v, gen_random_uuid());
+end $$;
+
+create or replace function tkp.replay_json(p_id uuid) returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select jsonb_build_object('id', r.id, 'match_key', r.match_key, 'started_at', r.started_at, 'ended_at', r.ended_at,
+    'chests', coalesce(r.corrected_chests, r.chests), 'replay_chests', r.chests, 'corrected_chests', r.corrected_chests,
+    'correction_reason', r.correction_reason, 'breakdown', r.breakdown, 'chest_times', r.chest_times,
+    'partial', r.partial, 'excluded', r.excluded, 'historical', r.historical, 'auto_session', r.auto_session,
+    'build', r.build, 'parser_version', r.parser_version, 'registry_version', r.registry_version,
+    'has_match_id', r.session_id is not null, 'imported_at', r.imported_at, 'updated_at', r.updated_at,
+    'revisions', jsonb_array_length(r.revisions),
+    'device', (select d.name from public.tk_devices d where d.id = r.device_id),
+    'party', case when r.party_link is null then null else jsonb_build_object('game_id', r.party_game_id, 'link', r.party_link,
+               'number', (select pg.number from public.tk_party_games pg where pg.id = r.party_game_id)) end)
+  from public.tk_replay_matches r where r.id = p_id
+$$;
+
+-- Ties an imported match to the squad game it belongs to and sets that member's contribution, or refreshes the
+-- contribution of a match already tied. The link is made only when it is reliable:
+--   1. "match-id": a squad game already tied (by a teammate's replay) to this exact Fortnite match, or
+--   2. "time-window": the one squad game this player took part in that overlaps the match well.
+-- Several candidates ("ambiguous") or a game that already has another replay from this player ("conflict") are
+-- left for the player to confirm on the website. Nothing is ever merged on timestamps alone across players.
+create or replace function tkp.replay_attach_party(p_match uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+declare r record; v_game uuid; v_link text; v_n integer; v_party uuid; v_effective integer; v_gm record;
+begin
+  select * into r from public.tk_replay_matches x where x.id = p_match for update;
+  if r.id is null then return; end if;
+  v_effective := case when r.excluded then null else coalesce(r.corrected_chests, r.chests) end;
+
+  if r.party_game_id is not null and r.party_link in ('match-id', 'time-window', 'confirmed') then
+    update public.tk_party_game_members set replay_chests = v_effective
+     where game_id = r.party_game_id and account_id = r.account_id and replay_match_id = r.id;
+    select g.party_id into v_party from public.tk_party_games g where g.id = r.party_game_id;
+    if v_party is not null then perform tkp.bump_party(v_party); end if;
+    return;
+  end if;
+  if r.excluded or r.historical or r.party_link = 'detached' then return; end if;
+  if tkp.tracking_mode(r.account_id) not in ('auto', 'hybrid') then return; end if;
+
+  if r.session_id is not null then
+    select g.id into v_game from public.tk_party_games g
+      join public.tk_party_game_members gm on gm.game_id = g.id and gm.account_id = r.account_id
+     where g.match_session_id = r.session_id and not g.void
+     order by g.started_at desc limit 1;
+    if v_game is not null then v_link := 'match-id'; end if;
+  end if;
+
+  if v_game is null then
+    select count(*), min(x.id::text)::uuid into v_n, v_game from (
+      select g.id from public.tk_party_games g
+        join public.tk_party_game_members gm on gm.game_id = g.id and gm.account_id = r.account_id
+       where not g.void
+         and (g.match_session_id is null or g.match_session_id = r.session_id)
+         and g.started_at < r.ended_at + interval '2 minutes'
+         and coalesce(g.ended_at, now()) > r.started_at - interval '2 minutes'
+         and extract(epoch from least(coalesce(g.ended_at, now()), r.ended_at) - greatest(g.started_at, r.started_at))
+             >= 0.5 * least(extract(epoch from coalesce(g.ended_at, now()) - g.started_at), extract(epoch from r.ended_at - r.started_at), 600)
+    ) x;
+    if v_n = 1 then
+      v_link := 'time-window';
+    elsif v_n > 1 then
+      update public.tk_replay_matches set party_link = 'ambiguous', party_game_id = null where id = r.id;
+      return;
+    else
+      return;
+    end if;
+  end if;
+
+  select * into v_gm from public.tk_party_game_members gm where gm.game_id = v_game and gm.account_id = r.account_id for update;
+  if v_gm.replay_match_id is not null and v_gm.replay_match_id <> r.id then
+    update public.tk_replay_matches set party_link = 'conflict', party_game_id = v_game where id = r.id;
+    return;
+  end if;
+  update public.tk_party_game_members set replay_match_id = r.id, replay_chests = v_effective where id = v_gm.id;
+  update public.tk_replay_matches set party_game_id = v_game, party_link = v_link where id = r.id;
+  update public.tk_party_games set match_session_id = coalesce(match_session_id, r.session_id) where id = v_game;
+  insert into public.tk_corrections (account_id, game_id, kind, detail)
+  values (r.account_id, v_game, 'replay_linked', jsonb_build_object('match', r.id, 'link', v_link, 'chests', v_effective));
+  select g.party_id into v_party from public.tk_party_games g where g.id = v_game;
+  perform tkp.bump_party(v_party);
+end $$;
+
+-- Removes a match's contribution from its squad game (used for "not my match" and manual re-linking).
+create or replace function tkp.replay_unlink_party(p_match uuid, p_link text) returns void
+language plpgsql security definer set search_path = '' as $$
+declare r record; v_party uuid;
+begin
+  select * into r from public.tk_replay_matches x where x.id = p_match for update;
+  if r.id is null then return; end if;
+  if r.party_game_id is not null then
+    update public.tk_party_game_members set replay_match_id = null, replay_chests = null
+     where game_id = r.party_game_id and replay_match_id = r.id;
+    select g.party_id into v_party from public.tk_party_games g where g.id = r.party_game_id;
+    insert into public.tk_corrections (account_id, game_id, kind, detail)
+    values (r.account_id, r.party_game_id, 'replay_unlinked', jsonb_build_object('match', r.id, 'reason', p_link));
+  end if;
+  update public.tk_replay_matches set party_game_id = null, party_link = p_link where id = r.id;
+  if v_party is not null then perform tkp.bump_party(v_party); end if;
 end $$;
 
 -- ---------------------------------------------------------------------------- accounts & sessions
@@ -977,19 +1376,37 @@ end $$;
 create or replace function tkp.game_json(p_game uuid, p_viewer uuid) returns jsonb
 language plpgsql stable security definer set search_path = '' as $$
 declare g record; v_members jsonb; v_linked integer; v_linked_n integer; v_mates jsonb; v_exact integer;
-        v_est numeric; v_unknown integer; v_est_n integer; v_mates_n integer;
+        v_est numeric; v_unknown integer; v_est_n integer; v_mates_n integer; v_pending integer; v_missing integer;
 begin
   select * into g from public.tk_party_games pg where pg.id = p_game;
   if g.id is null then return null; end if;
-  select coalesce(jsonb_agg(jsonb_build_object('account_id', gm.account_id,
-           'username', coalesce(a.username, gm.username_snapshot), 'avatar', coalesce(a.avatar, 'compass'),
-           'chests', gm.chests, 'joined_at', gm.joined_at, 'left_at', gm.left_at,
-           'is_me', gm.account_id is not distinct from p_viewer, 'former', gm.account_id is null)
-         order by gm.chests desc, gm.joined_at), '[]'::jsonb),
-         coalesce(sum(gm.chests), 0)::integer, count(*)::integer
-    into v_members, v_linked, v_linked_n
-    from public.tk_party_game_members gm left join public.tk_accounts a on a.id = gm.account_id
-   where gm.game_id = p_game;
+  -- A member on automatic PC tracking counts with their replay result; until it arrives they are pending
+  -- (never shown as zero). A replay that never arrived (45 minutes after the end) is "missing": unknown.
+  with mm as (
+    select gm.account_id, gm.joined_at, gm.left_at, gm.chests as live_chests, gm.tracking, gm.replay_chests,
+           coalesce(a.username, gm.username_snapshot) as uname, coalesce(a.avatar, 'compass') as av,
+           case when gm.replay_chests is not null then gm.replay_chests when gm.tracking = 'replay' then null else gm.chests end as eff,
+           case when gm.replay_chests is not null then 'synced'
+                when gm.tracking <> 'replay' then null
+                when g.status = 'active' then 'awaiting'
+                when exists (select 1 from public.tk_devices d where d.account_id = gm.account_id and d.revoked_at is null
+                               and d.status ->> 'state' = 'processing' and d.status_at > now() - interval '3 minutes') then 'processing'
+                when g.ended_at < now() - interval '45 minutes' then 'missing'
+                else 'awaiting' end as rstate
+      from public.tk_party_game_members gm left join public.tk_accounts a on a.id = gm.account_id
+     where gm.game_id = p_game)
+  select coalesce(jsonb_agg(jsonb_build_object('account_id', mm.account_id, 'username', mm.uname, 'avatar', mm.av,
+           'chests', mm.eff, 'live_chests', mm.live_chests, 'joined_at', mm.joined_at, 'left_at', mm.left_at,
+           'source', case when mm.replay_chests is not null or mm.tracking = 'replay' then 'replay' else 'live' end,
+           'replay_state', mm.rstate, 'pending', mm.eff is null and mm.rstate in ('awaiting', 'processing'),
+           'missing', mm.rstate = 'missing',
+           'is_me', mm.account_id is not distinct from p_viewer, 'former', mm.account_id is null)
+         order by coalesce(mm.eff, -1) desc, mm.joined_at), '[]'::jsonb),
+         coalesce(sum(mm.eff), 0)::integer, count(*)::integer,
+         (count(*) filter (where mm.eff is null and mm.rstate in ('awaiting', 'processing')))::integer,
+         (count(*) filter (where mm.rstate = 'missing'))::integer
+    into v_members, v_linked, v_linked_n, v_pending, v_missing
+    from mm;
   select coalesce(jsonb_agg(jsonb_build_object('slot', t.slot, 'label', t.label, 'mode', t.mode, 'exact_count', t.exact_count,
            'estimate_level', t.estimate_level, 'estimate_pct', t.estimate_pct, 'estimate_basis', t.estimate_basis,
            'estimate_count', t.estimate_count, 'linked', tkp.user_card(t.linked_account_id),
@@ -1005,8 +1422,10 @@ begin
     'confirmed', g.confirmed, 'started_at', g.started_at, 'ended_at', g.ended_at, 'auto_started', g.auto_started,
     'members', v_members, 'teammates', v_mates, 'linked_count', v_linked_n, 'open_slots', greatest(0, 4 - v_linked_n),
     'known_total', v_linked, 'reported_total', v_exact, 'estimated_total', v_est, 'unknown_count', v_unknown,
+    'pending_count', v_pending, 'missing_count', v_missing,
     'estimated_squad_total', v_linked + v_exact + v_est,
-    'completeness', tkp.completeness(v_linked_n, v_mates_n, v_unknown, v_est_n, g.confirmed),
+    'completeness', case when v_pending > 0 then 'pending' when v_missing > 0 then 'partial'
+                         else tkp.completeness(v_linked_n, v_mates_n, v_unknown, v_est_n, g.confirmed) end,
     'is_participant', exists (select 1 from public.tk_party_game_members gm where gm.game_id = p_game and gm.account_id = p_viewer));
 end $$;
 
@@ -1110,8 +1529,8 @@ begin
   insert into public.tk_party_members (party_id, account_id) values (p_party, p_account);
   select g.id into v_game from public.tk_party_games g where g.party_id = p_party and g.status = 'active';
   if v_game is not null then  -- late joiners count only chests opened from now on
-    insert into public.tk_party_game_members (game_id, account_id, username_snapshot)
-    values (v_game, p_account, (select a.username from public.tk_accounts a where a.id = p_account))
+    insert into public.tk_party_game_members (game_id, account_id, username_snapshot, tracking)
+    values (v_game, p_account, (select a.username from public.tk_accounts a where a.id = p_account), tkp.member_tracking(p_account))
     on conflict (game_id, account_id) do update set left_at = null;
   end if;
   perform tkp.bump_party(p_party);
@@ -1325,8 +1744,9 @@ begin
   insert into public.tk_party_games (party_id, number, started_by, auto_started)
   values (p_party, coalesce((select max(g.number) from public.tk_party_games g where g.party_id = p_party), 0) + 1, p_by, p_auto)
   returning id into v_game;
-  insert into public.tk_party_game_members (game_id, account_id, username_snapshot)
-  select v_game, m.account_id, a.username from public.tk_party_members m join public.tk_accounts a on a.id = m.account_id
+  insert into public.tk_party_game_members (game_id, account_id, username_snapshot, tracking)
+  select v_game, m.account_id, a.username, tkp.member_tracking(m.account_id)
+    from public.tk_party_members m join public.tk_accounts a on a.id = m.account_id
    where m.party_id = p_party and m.left_at is null;
   perform tkp.bump_party(p_party);
   return v_game;
@@ -1422,8 +1842,8 @@ begin
   on conflict (id) do nothing;
   get diagnostics n = row_count;
   if n = 0 then return jsonb_build_object('ok', true, 'linked', true, 'duplicate', true, 'game_id', v_gid); end if;
-  insert into public.tk_party_game_members (game_id, account_id, username_snapshot, joined_at)
-  values (v_gid, me, (select a.username from public.tk_accounts a where a.id = me), now())
+  insert into public.tk_party_game_members (game_id, account_id, username_snapshot, joined_at, tracking)
+  values (v_gid, me, (select a.username from public.tk_accounts a where a.id = me), now(), tkp.member_tracking(me))
   on conflict (game_id, account_id) do nothing;
   update public.tk_party_game_members set chests = chests + 1 where game_id = v_gid and account_id = me returning chests into v_count;
   perform tkp.bump_party(v_party);
@@ -1547,8 +1967,10 @@ create or replace function tkp.squad_stats(p_account uuid) returns jsonb
 language sql stable security definer set search_path = '' as $$
   with games as (
     select g.id, g.started_at, g.ended_at, g.confirmed,
-           (select coalesce(sum(gm.chests), 0) from public.tk_party_game_members gm where gm.game_id = g.id) as linked_total,
+           (select coalesce(sum(case when gm.replay_chests is not null then gm.replay_chests when gm.tracking = 'replay' then 0 else gm.chests end), 0)
+              from public.tk_party_game_members gm where gm.game_id = g.id) as linked_total,
            (select count(*) from public.tk_party_game_members gm where gm.game_id = g.id) as linked_n,
+           (select count(*) from public.tk_party_game_members gm where gm.game_id = g.id and gm.tracking = 'replay' and gm.replay_chests is null) as waiting_n,
            (select coalesce(sum(t.exact_count) filter (where t.mode = 'exact'), 0) from public.tk_party_game_teammates t where t.game_id = g.id) as exact_total,
            (select coalesce(sum(t.estimate_count) filter (where t.mode = 'estimated'), 0) from public.tk_party_game_teammates t where t.game_id = g.id) as est_total,
            (select count(*) filter (where t.mode = 'unknown') from public.tk_party_game_teammates t where t.game_id = g.id) as unknown_n,
@@ -1558,7 +1980,10 @@ language sql stable security definer set search_path = '' as $$
       join public.tk_party_game_members mine on mine.game_id = g.id and mine.account_id = p_account
      where g.status = 'ended' and not g.void
   ), c as (
-    select games.*, tkp.completeness(linked_n::integer, mates_n::integer, unknown_n::integer, est_n::integer, confirmed) as comp
+    -- a replay still on its way keeps the game out of every squad figure until it arrives (or is given up on)
+    select games.*, case when waiting_n > 0 and ended_at > now() - interval '45 minutes' then 'pending'
+                         when waiting_n > 0 then 'partial'
+                         else tkp.completeness(linked_n::integer, mates_n::integer, unknown_n::integer, est_n::integer, confirmed) end as comp
       from games
   )
   select jsonb_build_object(
@@ -1568,6 +1993,7 @@ language sql stable security definer set search_path = '' as $$
     'estimated', jsonb_build_object('games', count(*) filter (where comp in ('complete', 'reported', 'estimated')),
                                     'chests', coalesce(sum(linked_total + exact_total + est_total) filter (where comp in ('complete', 'reported', 'estimated')), 0)),
     'partial_games', count(*) filter (where comp = 'partial'),
+    'pending_games', count(*) filter (where comp = 'pending'),
     'unconfirmed_games', count(*) filter (where comp = 'unconfirmed'),
     'linked_rate', jsonb_build_object(
         'games', count(*) filter (where comp = 'complete' and ended_at - started_at >= interval '5 minutes'),
@@ -1587,6 +2013,414 @@ begin
                                 where g.status = 'ended' order by g.ended_at desc
                                 limit least(greatest(coalesce(p_limit, 20), 1), 50)) x), '[]'::jsonb),
     'stats', tkp.squad_stats(me));
+end $$;
+
+-- ------------------------------------------------------------- automatic PC tracking: the companion
+-- These are called by TOKENIFY Companion with its device id + secret (no browser session), so they are also open
+-- to the anon role; each one checks the device itself (tkp.device_gate).
+
+-- Links a new companion with the one-time code shown on the website (10 minutes, single use, 40 bits, throttled
+-- per IP and overall). Returns the device secret exactly once.
+create or replace function public.tk_device_pair(p_code text, p_name text default null, p_app_version text default null) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare v_ip text := coalesce(tkp.client_ip(), 'unknown'); v_code text := tkp.normalize_code(p_code); pr record;
+        v_secret text; v_dev uuid;
+begin
+  if not tkp.rate_take('pair-ip:' || v_ip, 10, interval '10 minutes') or not tkp.rate_take('pair-all', 500, interval '10 minutes') then
+    return jsonb_build_object('ok', false, 'error', 'rate_limited');
+  end if;
+  if char_length(v_code) <> 8 then return jsonb_build_object('ok', false, 'error', 'bad_code'); end if;
+  select * into pr from public.tk_device_pairings x where x.code_hash = tkp.code_hash('pair', v_code) for update;
+  if pr.id is null or pr.used_at is not null or pr.expires_at < now() then return jsonb_build_object('ok', false, 'error', 'bad_code'); end if;
+  if (select count(*) from public.tk_devices d where d.account_id = pr.account_id and d.revoked_at is null) >= 5 then
+    return jsonb_build_object('ok', false, 'error', 'too_many_devices');
+  end if;
+  v_secret := tkp.random_secret();
+  insert into public.tk_devices (account_id, name, secret_hash, app_version, last_seen_at)
+  values (pr.account_id, coalesce(tkp.clean_label(p_name, 40), 'Windows PC'), tkp.secret_hash(v_secret), tkp.clean_text(p_app_version, 24), now())
+  returning id into v_dev;
+  update public.tk_device_pairings set used_at = now(), device_id = v_dev where id = pr.id;
+  -- linking a PC means "count my chests automatically" unless the player already chose otherwise
+  update public.tk_accounts a set settings = jsonb_set(a.settings, '{tracking}', '"auto"')
+   where a.id = pr.account_id and coalesce(a.settings ->> 'tracking', '') = '';
+  perform tkp.bump_account(pr.account_id);
+  return jsonb_build_object('ok', true, 'device_id', v_dev, 'secret', v_secret, 'account', tkp.user_card(pr.account_id),
+    'tracking', tkp.tracking_mode(pr.account_id), 'season_start', tkp.season_start());
+end $$;
+
+-- Regular check-in: reports the companion's status, returns the account's choices, and rotates the secret
+-- every 30 days (the new secret becomes the only valid one the first time it is used).
+create or replace function public.tk_device_hello(p_device uuid, p_secret text, p_status jsonb default null, p_app_version text default null) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare g record; d record; v_rotate text; v_status jsonb := tkp.device_status_clean(p_status); v_party uuid;
+begin
+  select * into g from tkp.device_gate(p_device, p_secret, 'devhello', 180, interval '1 hour');
+  if g.err is not null then return g.err; end if;
+  select * into d from public.tk_devices x where x.id = g.device_id for update;
+  if d.secret_issued_at < now() - interval '30 days' then
+    v_rotate := tkp.random_secret();
+    update public.tk_devices set next_secret_hash = tkp.secret_hash(v_rotate) where id = d.id;
+  end if;
+  update public.tk_devices set status = coalesce(v_status, status), status_at = case when v_status is not null then now() else status_at end,
+         app_version = coalesce(tkp.clean_text(p_app_version, 24), app_version), rescan_requested_at = null
+   where id = d.id;
+  if v_status is not null and d.status is distinct from v_status then
+    perform tkp.bump_account(d.account_id);
+    v_party := tkp.active_party_of(d.account_id);
+    if v_party is not null and (d.status ->> 'state') is distinct from (v_status ->> 'state') then perform tkp.bump_party(v_party); end if;
+  end if;
+  return jsonb_build_object('ok', true, 'account', tkp.user_card(d.account_id), 'device_name', d.name,
+    'tracking', tkp.tracking_mode(d.account_id), 'rotate_secret', v_rotate, 'rescan', d.rescan_requested_at is not null,
+    'profiles', (select coalesce(jsonb_agg(jsonb_build_object('player_hash', p.player_hash, 'label', p.label) order by p.created_at), '[]'::jsonb)
+                   from public.tk_replay_profiles p where p.account_id = d.account_id),
+    'season_start', tkp.season_start(),
+    'server_time', now());
+end $$;
+
+-- "This Fortnite account is mine": first claim wins, so one player's chests can't land on another account.
+create or replace function public.tk_device_profile_claim(p_device uuid, p_secret text, p_player_hash text, p_label text default null) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare g record; v_owner uuid;
+begin
+  select * into g from tkp.device_gate(p_device, p_secret, 'devclaim', 30, interval '1 hour');
+  if g.err is not null then return g.err; end if;
+  if coalesce(p_player_hash, '') !~ '^[0-9a-f]{64}$' then return jsonb_build_object('ok', false, 'error', 'invalid'); end if;
+  select p.account_id into v_owner from public.tk_replay_profiles p where p.player_hash = p_player_hash for update;
+  if v_owner is not null and v_owner <> g.account_id then return jsonb_build_object('ok', false, 'error', 'profile_conflict'); end if;
+  insert into public.tk_replay_profiles (player_hash, account_id, label, device_id)
+  values (p_player_hash, g.account_id, tkp.clean_label(p_label, 40), g.device_id)
+  on conflict (player_hash) do update set label = coalesce(excluded.label, public.tk_replay_profiles.label), device_id = excluded.device_id;
+  perform tkp.bump_account(g.account_id);
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- One finished match. Idempotent: the same match sent again (retry, reinstall, second PC) never counts twice;
+-- a newer parser's result replaces the old one (kept in revisions) but never a player's own correction.
+create or replace function public.tk_device_import(p_device uuid, p_secret text, p_match jsonb) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare g record; m jsonb := p_match; v_problem text; v_hash text; v_session text; v_guid text; v_key text;
+        v_start timestamptz; v_end timestamptz; v_chests integer; v_parser text; v_registry integer; v_hist boolean;
+        v_partial boolean; v_owner uuid; ex record; v_id uuid; v_status text; v_breakdown jsonb; v_times jsonb; v_build text;
+begin
+  select * into g from tkp.device_gate(p_device, p_secret, 'devimp', 600, interval '1 hour');
+  if g.err is not null then return g.err; end if;
+  v_problem := tkp.replay_problem(m);
+  if v_problem is not null then return jsonb_build_object('ok', false, 'error', 'invalid_match', 'detail', v_problem); end if;
+  v_hash := m ->> 'player_hash';
+  select p.account_id into v_owner from public.tk_replay_profiles p where p.player_hash = v_hash;
+  if v_owner is null then return jsonb_build_object('ok', false, 'error', 'profile_unclaimed'); end if;
+  if v_owner <> g.account_id then return jsonb_build_object('ok', false, 'error', 'profile_conflict'); end if;
+
+  v_session := lower(m ->> 'session_id');
+  v_guid := lower(m ->> 'replay_guid');
+  v_key := case when v_session is not null then 'fn:' || v_session else 'rg:' || v_guid end;
+  v_start := (m ->> 'started_at')::timestamptz;
+  v_end := (m ->> 'ended_at')::timestamptz;
+  v_chests := (m ->> 'chests')::integer;
+  v_parser := m ->> 'parser_version';
+  v_registry := (m ->> 'registry_version')::integer;
+  v_hist := coalesce((m ->> 'historical')::boolean, false);
+  v_partial := coalesce((m ->> 'partial')::boolean, false);
+  v_breakdown := coalesce(m -> 'breakdown', '{}'::jsonb);
+  v_times := m -> 'chest_times';
+  v_build := tkp.clean_text(m ->> 'build', 80);
+
+  -- the same match, or the same recording under its replay id (a newer parser may have found the match id)
+  select * into ex from public.tk_replay_matches r
+   where r.account_id = g.account_id and (r.match_key = v_key or (v_guid is not null and r.replay_guid = v_guid))
+   order by (r.match_key = v_key) desc limit 1 for update;
+  if ex.id is null then
+    insert into public.tk_replay_matches (account_id, device_id, player_hash, match_key, replay_guid, session_id, started_at, ended_at,
+      build, parser_version, registry_version, chests, breakdown, chest_times, partial, historical, auto_session)
+    values (g.account_id, g.device_id, v_hash, v_key, v_guid, v_session, v_start, v_end, v_build, v_parser, v_registry,
+      v_chests, v_breakdown, v_times, v_partial, v_hist, tkp.auto_session_for(g.account_id, v_start, v_end, v_hist))
+    returning id into v_id;
+    v_status := 'created';
+  else
+    v_id := ex.id;
+    if ex.player_hash <> v_hash then return jsonb_build_object('ok', false, 'error', 'conflict'); end if;
+    if tkp.version_num(v_parser) < tkp.version_num(ex.parser_version)
+       or (not ex.partial and v_partial)
+       or (ex.chests = v_chests and ex.parser_version = v_parser and ex.registry_version = v_registry and ex.partial = v_partial
+           and ex.match_key = v_key and ex.chest_times = v_times) then
+      v_status := 'unchanged';   -- a retry, an older companion, or a partial read of a match already complete
+    else
+      update public.tk_replay_matches set
+        match_key = v_key, session_id = coalesce(v_session, session_id), replay_guid = coalesce(v_guid, replay_guid),
+        started_at = v_start, ended_at = v_end, build = coalesce(v_build, build), parser_version = v_parser,
+        registry_version = v_registry, chests = v_chests, breakdown = v_breakdown, chest_times = v_times,
+        partial = v_partial, device_id = g.device_id, updated_at = now(),
+        revisions = tkp.revisions_push(revisions, jsonb_build_object('at', now(), 'kind', 'parser',
+          'parser_version', ex.parser_version, 'registry_version', ex.registry_version, 'chests', ex.chests, 'partial', ex.partial))
+       where id = ex.id;
+      v_status := case when ex.corrected_chests is not null then 'updated_kept_correction' else 'updated' end;
+    end if;
+  end if;
+
+  update public.tk_devices set last_sync_at = now() where id = g.device_id;
+  update public.tk_replay_profiles set last_match_at = greatest(coalesce(last_match_at, v_start), v_start) where player_hash = v_hash;
+  if v_status <> 'unchanged' then
+    perform tkp.replay_attach_party(v_id);
+    perform tkp.bump_account(g.account_id);
+  end if;
+  return jsonb_build_object('ok', true, 'status', v_status, 'match', tkp.replay_json(v_id));
+end $$;
+
+-- The server's view of recent matches, so a reinstalled or second companion shows what TOKENIFY already has.
+create or replace function public.tk_device_matches(p_device uuid, p_secret text, p_limit integer default 50) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare g record;
+begin
+  select * into g from tkp.device_gate(p_device, p_secret, 'devlist', 60, interval '1 hour');
+  if g.err is not null then return g.err; end if;
+  return jsonb_build_object('ok', true, 'matches', coalesce((
+    select jsonb_agg(jsonb_build_object('match_key', x.match_key, 'replay_guid', x.replay_guid,
+             'chests', coalesce(x.corrected_chests, x.chests), 'replay_chests', x.chests, 'corrected', x.corrected_chests is not null,
+             'excluded', x.excluded, 'party_link', x.party_link, 'parser_version', x.parser_version, 'updated_at', x.updated_at)
+           order by x.started_at desc)
+      from (select * from public.tk_replay_matches r where r.account_id = g.account_id
+             order by r.started_at desc limit least(greatest(coalesce(p_limit, 50), 1), 500)) x), '[]'::jsonb));
+end $$;
+
+-- "Disconnect" from the companion itself.
+create or replace function public.tk_device_disconnect(p_device uuid, p_secret text) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare g record;
+begin
+  select * into g from tkp.device_gate(p_device, p_secret, null, null, null);
+  if g.err is not null then
+    return case when g.err ->> 'error' = 'device_revoked' then jsonb_build_object('ok', true) else g.err end;
+  end if;
+  update public.tk_devices set revoked_at = now() where id = g.device_id;
+  perform tkp.bump_account(g.account_id);
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- --------------------------------------------------------------- automatic PC tracking: the website
+create or replace function public.tk_device_pair_start() returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := tkp.require_account(); v_code text; v_exp timestamptz := now() + interval '10 minutes';
+begin
+  if not tkp.rate_take('pairstart:' || me, 12, interval '1 hour') then return jsonb_build_object('ok', false, 'error', 'rate_limited'); end if;
+  if (select count(*) from public.tk_devices d where d.account_id = me and d.revoked_at is null) >= 5 then
+    return jsonb_build_object('ok', false, 'error', 'too_many_devices');
+  end if;
+  delete from public.tk_device_pairings where account_id = me and used_at is null;   -- one live code at a time
+  loop
+    v_code := tkp.random_code(8);
+    begin
+      insert into public.tk_device_pairings (account_id, code_hash, expires_at) values (me, tkp.code_hash('pair', v_code), v_exp);
+      exit;
+    exception when unique_violation then
+      null;   -- astronomically unlikely; draw another code
+    end;
+  end loop;
+  return jsonb_build_object('ok', true, 'code', substr(v_code, 1, 4) || '-' || substr(v_code, 5, 4), 'expires_at', v_exp);
+end $$;
+
+create or replace function public.tk_pc_tracking_state() returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := tkp.require_account();
+begin
+  return jsonb_build_object('ok', true,
+    'tracking', tkp.tracking_mode(me),
+    'season_start', tkp.season_start(),
+    'auto_gap', (extract(epoch from tkp.auto_gap(me)) / 60)::integer,
+    'devices', (select coalesce(jsonb_agg(jsonb_build_object('id', d.id, 'name', d.name, 'created_at', d.created_at,
+                  'last_seen_at', d.last_seen_at, 'last_sync_at', d.last_sync_at, 'app_version', d.app_version,
+                  'status', d.status, 'status_at', d.status_at,
+                  'online', coalesce(d.last_seen_at, d.created_at) > now() - interval '12 minutes') order by d.created_at), '[]'::jsonb)
+                  from public.tk_devices d where d.account_id = me and d.revoked_at is null),
+    'pairing', (select jsonb_build_object('expires_at', p.expires_at) from public.tk_device_pairings p
+                 where p.account_id = me and p.used_at is null and p.expires_at > now() order by p.created_at desc limit 1),
+    'profiles', (select coalesce(jsonb_agg(jsonb_build_object('player_hash', p.player_hash, 'label', p.label,
+                   'created_at', p.created_at, 'last_match_at', p.last_match_at) order by p.created_at), '[]'::jsonb)
+                   from public.tk_replay_profiles p where p.account_id = me),
+    'matches', (select count(*) from public.tk_replay_matches r where r.account_id = me and not r.excluded),
+    'last_match', (select tkp.replay_json(r.id) from public.tk_replay_matches r where r.account_id = me and not r.excluded
+                    order by r.ended_at desc limit 1));
+end $$;
+
+create or replace function public.tk_device_rename(p_device uuid, p_name text) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := tkp.require_account(); v text := tkp.clean_label(p_name, 40);
+begin
+  if v is null then return jsonb_build_object('ok', false, 'error', 'invalid_name'); end if;
+  update public.tk_devices set name = v where id = p_device and account_id = me and revoked_at is null;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  perform tkp.bump_account(me);
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- Revoking a PC stops every future upload from that installation at once.
+create or replace function public.tk_device_revoke(p_device uuid) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := tkp.require_account();
+begin
+  update public.tk_devices set revoked_at = now() where id = p_device and account_id = me and revoked_at is null;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  perform tkp.bump_account(me);
+  return jsonb_build_object('ok', true);
+end $$;
+
+create or replace function public.tk_device_rescan(p_device uuid) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := tkp.require_account();
+begin
+  if not tkp.rate_take('rescan:' || me, 20, interval '1 hour') then return jsonb_build_object('ok', false, 'error', 'rate_limited'); end if;
+  update public.tk_devices set rescan_requested_at = now() where id = p_device and account_id = me and revoked_at is null;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  return jsonb_build_object('ok', true);
+end $$;
+
+create or replace function public.tk_tracking_settings(p_mode text default null, p_auto_gap integer default null) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := tkp.require_account(); v_party uuid;
+begin
+  if not tkp.rate_take('tracking:' || me, 60, interval '10 minutes') then return jsonb_build_object('ok', false, 'error', 'rate_limited'); end if;
+  if p_mode is not null and p_mode not in ('manual', 'auto', 'hybrid') then return jsonb_build_object('ok', false, 'error', 'invalid_mode'); end if;
+  if p_auto_gap is not null and (p_auto_gap < 5 or p_auto_gap > 240) then return jsonb_build_object('ok', false, 'error', 'invalid_gap'); end if;
+  update public.tk_accounts a set settings = a.settings
+      || case when p_mode is null then '{}'::jsonb else jsonb_build_object('tracking', p_mode) end
+      || case when p_auto_gap is null then '{}'::jsonb else jsonb_build_object('auto_gap', p_auto_gap) end
+   where a.id = me;
+  v_party := tkp.active_party_of(me);
+  if v_party is not null then   -- a squad game in progress follows the new choice from now on
+    update public.tk_party_game_members gm set tracking = tkp.member_tracking(me)
+      from public.tk_party_games g
+     where g.id = gm.game_id and g.party_id = v_party and g.status = 'active' and gm.account_id = me and gm.replay_chests is null;
+    perform tkp.bump_party(v_party);
+  end if;
+  perform tkp.bump_account(me);
+  return jsonb_build_object('ok', true, 'tracking', tkp.tracking_mode(me), 'auto_gap', (extract(epoch from tkp.auto_gap(me)) / 60)::integer);
+end $$;
+
+-- Imported matches changed since p_since (inclusive), oldest change first: the website applies them to the
+-- Live Counter's history idempotently, so fetching the same change twice is harmless.
+create or replace function public.tk_replay_matches(p_since timestamptz default null, p_limit integer default 300) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := tkp.require_account(); v_limit integer := least(greatest(coalesce(p_limit, 300), 1), 500); v jsonb; v_n integer;
+begin
+  select coalesce(jsonb_agg(tkp.replay_json(x.id) order by x.updated_at, x.id), '[]'::jsonb), count(*)
+    into v, v_n
+    from (select r.id, r.updated_at from public.tk_replay_matches r
+           where r.account_id = me and (p_since is null or r.updated_at >= p_since)
+           order by r.updated_at, r.id limit v_limit) x;
+  return jsonb_build_object('ok', true, 'matches', v, 'more', v_n >= v_limit, 'tracking', tkp.tracking_mode(me));
+end $$;
+
+-- A player's own correction of an imported count. The replay's number is kept for audit, a newer parser never
+-- overwrites the correction, and p_chests = null removes it.
+create or replace function public.tk_replay_correct(p_match uuid, p_chests integer, p_reason text default null) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := tkp.require_account(); r record;
+begin
+  if not tkp.rate_take('rcorrect:' || me, 60, interval '10 minutes') then return jsonb_build_object('ok', false, 'error', 'rate_limited'); end if;
+  if p_chests is not null and (p_chests < 0 or p_chests > 400) then return jsonb_build_object('ok', false, 'error', 'invalid_count'); end if;
+  select * into r from public.tk_replay_matches x where x.id = p_match and x.account_id = me for update;
+  if r.id is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  update public.tk_replay_matches set corrected_chests = p_chests,
+         correction_reason = case when p_chests is null then null else tkp.clean_label(p_reason, 120) end,
+         corrected_at = case when p_chests is null then null else now() end, updated_at = now(),
+         revisions = tkp.revisions_push(revisions, jsonb_build_object('at', now(),
+           'kind', case when p_chests is null then 'correction_cleared' else 'correction' end,
+           'before', coalesce(r.corrected_chests, r.chests), 'after', coalesce(p_chests, r.chests), 'reason', tkp.clean_label(p_reason, 120)))
+   where id = r.id;
+  perform tkp.replay_attach_party(r.id);
+  perform tkp.bump_account(me);
+  return jsonb_build_object('ok', true, 'match', tkp.replay_json(r.id));
+end $$;
+
+-- "Not my match": excluded matches count nowhere (personal or squad) until included again.
+create or replace function public.tk_replay_exclude(p_match uuid, p_excluded boolean) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := tkp.require_account(); r record; v boolean := coalesce(p_excluded, true);
+begin
+  if not tkp.rate_take('rcorrect:' || me, 60, interval '10 minutes') then return jsonb_build_object('ok', false, 'error', 'rate_limited'); end if;
+  select * into r from public.tk_replay_matches x where x.id = p_match and x.account_id = me for update;
+  if r.id is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  update public.tk_replay_matches set excluded = v, updated_at = now(),
+         revisions = tkp.revisions_push(revisions, jsonb_build_object('at', now(), 'kind', case when v then 'excluded' else 'included' end))
+   where id = r.id;
+  if v then perform tkp.replay_unlink_party(r.id, null); else perform tkp.replay_attach_party(r.id); end if;
+  perform tkp.bump_account(me);
+  return jsonb_build_object('ok', true, 'match', tkp.replay_json(r.id));
+end $$;
+
+-- Squad games a match could belong to (for "which squad game was this?").
+create or replace function public.tk_replay_party_candidates(p_match uuid) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := tkp.require_account(); r record;
+begin
+  select * into r from public.tk_replay_matches x where x.id = p_match and x.account_id = me;
+  if r.id is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  return jsonb_build_object('ok', true, 'games', coalesce((
+    select jsonb_agg(jsonb_build_object('id', g.id, 'number', g.number, 'started_at', g.started_at, 'ended_at', g.ended_at,
+             'status', g.status, 'linked_here', gm.replay_match_id = r.id,
+             'other_replay', gm.replay_match_id is not null and gm.replay_match_id <> r.id) order by g.started_at)
+      from public.tk_party_games g join public.tk_party_game_members gm on gm.game_id = g.id and gm.account_id = me
+     where not g.void and g.started_at < r.ended_at + interval '30 minutes'
+       and coalesce(g.ended_at, now()) > r.started_at - interval '30 minutes'), '[]'::jsonb));
+end $$;
+
+create or replace function public.tk_replay_attach(p_match uuid, p_game uuid, p_replace boolean default false) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := tkp.require_account(); r record; gm record; v_party uuid; v_void boolean;
+begin
+  select * into r from public.tk_replay_matches x where x.id = p_match and x.account_id = me for update;
+  if r.id is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  if r.excluded or r.historical then return jsonb_build_object('ok', false, 'error', 'not_linkable'); end if;
+  select g.party_id, g.void into v_party, v_void from public.tk_party_games g where g.id = p_game;
+  select * into gm from public.tk_party_game_members m where m.game_id = p_game and m.account_id = me for update;
+  if gm.id is null or v_void then return jsonb_build_object('ok', false, 'error', 'not_participant'); end if;
+  if gm.replay_match_id is not null and gm.replay_match_id <> r.id then
+    if not coalesce(p_replace, false) then return jsonb_build_object('ok', false, 'error', 'slot_taken'); end if;
+    perform tkp.replay_unlink_party(gm.replay_match_id, 'conflict');
+  end if;
+  if r.party_game_id is not null and r.party_game_id <> p_game then perform tkp.replay_unlink_party(r.id, null); end if;
+  update public.tk_party_game_members set replay_match_id = r.id, replay_chests = coalesce(r.corrected_chests, r.chests) where id = gm.id;
+  update public.tk_replay_matches set party_game_id = p_game, party_link = 'confirmed', updated_at = now() where id = r.id;
+  update public.tk_party_games set match_session_id = coalesce(match_session_id, r.session_id) where id = p_game;
+  insert into public.tk_corrections (account_id, game_id, kind, detail) values (me, p_game, 'replay_confirmed', jsonb_build_object('match', r.id));
+  perform tkp.bump_party(v_party);
+  perform tkp.bump_account(me);
+  return jsonb_build_object('ok', true, 'match', tkp.replay_json(r.id));
+end $$;
+
+create or replace function public.tk_replay_detach(p_match uuid) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := tkp.require_account();
+begin
+  if not exists (select 1 from public.tk_replay_matches x where x.id = p_match and x.account_id = me) then
+    return jsonb_build_object('ok', false, 'error', 'not_found');
+  end if;
+  perform tkp.replay_unlink_party(p_match, 'detached');
+  update public.tk_replay_matches set updated_at = now() where id = p_match;
+  perform tkp.bump_account(me);
+  return jsonb_build_object('ok', true, 'match', tkp.replay_json(p_match));
+end $$;
+
+create or replace function public.tk_replay_profile_unlink(p_player_hash text) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := tkp.require_account();
+begin
+  delete from public.tk_replay_profiles where player_hash = p_player_hash and account_id = me;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  perform tkp.bump_account(me);
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- A PC player whose replay never arrived can count that squad game with what they counted live instead.
+create or replace function public.tk_party_use_live_count(p_game uuid) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := tkp.require_account(); v_party uuid;
+begin
+  update public.tk_party_game_members set tracking = 'live' where game_id = p_game and account_id = me and replay_chests is null;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  select g.party_id into v_party from public.tk_party_games g where g.id = p_game;
+  insert into public.tk_corrections (account_id, game_id, kind, detail) values (me, p_game, 'use_live_count', '{}'::jsonb);
+  perform tkp.bump_party(v_party);
+  return jsonb_build_object('ok', true, 'game', tkp.game_json(p_game, me));
 end $$;
 
 -- --------------------------------------------------------------------------------------- deletion
@@ -1644,6 +2478,13 @@ end $$;
 grant execute on function tkp.current_account() to authenticated;            -- used by RLS policies
 grant execute on function tkp.is_party_member(uuid) to authenticated;        -- used by RLS policies
 grant execute on function public.tk_username_available(text) to anon;        -- live check on the sign-up form
+-- TOKENIFY Companion authenticates with its own device secret, checked inside each function:
+grant execute on function public.tk_device_pair(text, text, text) to anon;
+grant execute on function public.tk_device_hello(uuid, text, jsonb, text) to anon;
+grant execute on function public.tk_device_profile_claim(uuid, text, text, text) to anon;
+grant execute on function public.tk_device_import(uuid, text, jsonb) to anon;
+grant execute on function public.tk_device_matches(uuid, text, integer) to anon;
+grant execute on function public.tk_device_disconnect(uuid, text) to anon;
 
 -- ------------------------------------------------------------------------------ retire v1 (email)
 -- v1 used Supabase email accounts. Its write function would let any signed-in browser session store
@@ -1660,5 +2501,6 @@ end $$;
 -- What the SQL editor shows after running this file:
 select (select count(*) from public.tk_accounts) as tokenify_accounts,
        (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname like 'tk\_%') as tk_functions,
+       (select count(*) from public.tk_devices where revoked_at is null) as linked_pcs,
        (select count(*) from auth.users u where not coalesce(u.is_anonymous, false)) as v1_email_users,
        to_regclass('public.tracker_state') is not null as v1_table_kept;

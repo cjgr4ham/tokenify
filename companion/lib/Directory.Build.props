@@ -1,0 +1,13 @@
+<Project>
+  <!--
+    Vendored replay library: Unreal.Core, Unreal.Encryption and OozSharp from Shiqan/FortniteReplayDecompressor
+    (MIT, commit 76f74c1) with the fixes documented in PATCHES-Fortnite-ChestCounter.md by LED-N/Fortnite-ChestCounter
+    (MIT). OozSharp is GPL-3.0-or-later (a C# port of powzix/ooz), which is why TOKENIFY Companion is GPL-3.0-or-later.
+    The upstream code is kept as-is, so its nullable warnings are silenced here rather than "fixed".
+  -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+  <PropertyGroup>
+    <NoWarn>$(NoWarn);CS8600;CS8601;CS8602;CS8603;CS8604;CS8618;CS8625;CS8629;CS0168;CS0219;CS1998;CS8619;CS8620;CS8765;CS8767;CS0414;CS0649;CS0169;CS8618;CS8622;CS1591;CS0162;CS8714;CS8762;CS0618</NoWarn>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+</Project>
