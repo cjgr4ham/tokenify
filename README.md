@@ -9,7 +9,10 @@ Tabs: **Open Chests · Probability Lab · Live Tracker · Collection**
 
 ## Launch
 
-**Recommended:** double-click **`start.bat`**. It starts a tiny local server (Windows PowerShell,
+**Online:** play at **https://cjgr4ham.github.io/tokenify/**. Nothing to install, and it works on phones too.
+Data saved there is separate from a local copy unless you sign in on both.
+
+**On your PC:** double-click **`start.bat`**. It starts a tiny local server (Windows PowerShell,
 nothing to install) and opens `http://localhost:8080/`. Keep that window open while you play.
 
 **Also works:** open `index.html` directly. Everything runs, but browsers restrict a few things for
