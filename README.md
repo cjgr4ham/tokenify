@@ -94,7 +94,8 @@ Without setup, TOKENIFY runs in **guest mode** (saved in this browser). To enabl
 Then use the account button in the top bar: sign up (with email confirmation), log in, reset
 password, log out, or delete the account. Guest data can be uploaded or merged on first sign-in;
 merges are by record ID and never overwrite. Offline changes sync when you are back online.
-*Not tested against a live Supabase project in this build. It activates only once configured.*
+Accounts activate only once `js/config.js` and `js/supabase-key.js` are filled in; otherwise TOKENIFY
+stays in guest mode.
 
 ## Tests
 
