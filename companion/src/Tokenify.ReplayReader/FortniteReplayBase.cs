@@ -29,6 +29,12 @@ public abstract class FortniteReplayBase : ReplayReader<Replay>
     /// <summary>Replay time (seconds) of the frame being read.</summary>
     protected static float Now => CurrentTime;
 
+    /// <summary>Research only: the same clock, readable from outside while a read is running.</summary>
+    public static float Clock => CurrentTime;
+
+    /// <summary>Research only: where the replay library's own warnings go (normally nowhere).</summary>
+    public void UseLogger(Microsoft.Extensions.Logging.ILogger logger) => _logger = logger;
+
     /// <summary>Corrupt export blocks skipped without allocating (diagnostics).</summary>
     public int RejectedCorruptBlocks { get; protected set; }
 

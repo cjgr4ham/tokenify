@@ -193,12 +193,19 @@ internal sealed class MatchesPage : Page
         _category.ForeColor = m.Category == Category.ReplayConfirmed ? Theme.Green : m.Category == Category.UserCorrected ? Theme.Gold : Theme.Coral;
 
         var parts = new List<string> { $"{m.Searched} searched", $"{m.Destroyed} destroyed{(CountDestroyed ? "" : " (not counted: your setting)")}" };
+        var events = Tokenify.Core.Tracker.EventsOf(m);
+        var unrecorded = events.Count(e => e.Counted && e.Kind == EvidenceAnalyzer.UnrecordedKind);
+        if (unrecorded > 0) parts[0] += $" ({unrecorded} from your own searches, chest type not recorded)";
         if (m.Ambiguous > 0) parts.Add($"{m.Ambiguous} ambiguous (not counted)");
         _breakdown.Text = (m.Corrected is int corrected ? $"Replay detected: {replay}.  You observed: {corrected}.  Difference: {corrected - replay:+0;-0;0}.   " : "The replay shows: ")
             + string.Join("  ·  ", parts);
 
         var notes = new List<string>();
         if (m.Partial && m.Corrected is null) notes.Add("Only part of this replay could be read, so the real count may be higher. It is not in your statistics unless you choose to use it.");
+        if (events.Count(e => e.Signals.Contains(Signal.CharacterNotRecorded)) is > 0 and var gaps)
+        {
+            notes.Add($"For {gaps} stretch{(gaps == 1 ? "" : "es")} of this match the replay holds almost nothing about your character (after a reboot), so this count is a minimum. The times are in the list below.");
+        }
         if (m.ManualTaps is int taps) notes.Add($"Your own count while playing (manual shortcut): {taps}.");
         if (m.PlayerName is not null) notes.Add($"Fortnite account: {m.PlayerName}.");
         if (m.NoRecord > 0) notes.Add($"{Ui.Plural(m.NoRecord, "chest spot", "chest spots")} also vanished with no record of who or why, unrelated to anything you did: not counted.");
@@ -370,7 +377,7 @@ internal sealed class MatchesPage : Page
         using (var line = new Pen(Theme.Line)) g.DrawLine(line, r.Left + 10 * S, r.Bottom - 1, r.Right - 8 * S, r.Bottom - 1);
 
         var what = ev.Action switch { ChestAction.Searched => "Opened", ChestAction.Destroyed => "Destroyed", _ => "Vanished" };
-        var kind = ev.Kind switch { "regular" => "Chest", "rare" => "Rare chest", "buried" => "Buried chest", "relic" => "Sprite vault chest", "poster" => "Sprite poster chest", _ => "Chest" };
+        var kind = ev.Kind switch { "regular" => "Chest", "rare" => "Rare chest", "buried" => "Buried chest", "relic" => "Sprite vault chest", "poster" => "Sprite poster chest", EvidenceAnalyzer.UnrecordedKind => "Chest (type not recorded)", _ => "Chest" };
         var (chip, chipColor) = ev.Evidence switch
         {
             Evidence.Confirmed => ("CONFIRMED", Theme.Green),
@@ -391,7 +398,9 @@ internal sealed class MatchesPage : Page
 
         var left = r.Left + (int)(12 * S);
         var width = r.Width - chipWidth - (int)(34 * S);
-        TextRenderer.DrawText(g, $"{Exporter.Clock(ev.Time)}   {what}  ·  {kind}{(ev.Reopened ? "  ·  refilled, opened again" : "")}{(ev.Unverified ? "  ·  unverified type" : "")}",
+        var title = ev.Signals.Contains(Signal.CharacterNotRecorded) ? "Your character was not recorded"
+            : $"{what}  ·  {kind}{(ev.Reopened ? "  ·  refilled, opened again" : "")}{(ev.Unverified ? "  ·  unverified type" : "")}";
+        TextRenderer.DrawText(g, $"{Exporter.Clock(ev.Time)}   {title}",
             Theme.Bold(9.75f), new Rectangle(left, r.Top + (int)(7 * S), width, (int)(20 * S)), ev.Counted ? Theme.Text : Theme.TextDim, TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
         TextRenderer.DrawText(g, EventDetail(ev), Theme.Small, new Rectangle(left, r.Top + (int)(28 * S), r.Width - (int)(24 * S), r.Height - (int)(34 * S)),
             ev.Evidence == Evidence.Ambiguous ? Theme.GoldLight : Theme.TextDim, TextFormatFlags.NoPadding | TextFormatFlags.WordBreak);

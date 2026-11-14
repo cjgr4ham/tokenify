@@ -4,29 +4,39 @@
     "note": "Fortnite 32.00. Cross-checked: rossalv/fortnite-chest-counter and LED-N/Fortnite-ChestCounter find the same 5 chests at the same times (2 destroyed rather than searched). Not hand-verified against video.",
     "chests": 5,
     "destroyed": 2,
-    "times": [91, 105, 161, 232, 377],
+    "times": [
+      91,
+      105,
+      161,
+      232,
+      377
+    ],
     "recorderPrefix": "8a3fc430",
-    "sessionPrefix": "230f99f3"
+    "sessionPrefix": "230f99f3",
+    "unrecorded": 8
   },
   {
     "file": "chapter2season6_10.replay",
     "note": "Fortnite 16.10. All three parsers: 0 chests by the recording player, ~18 opened by others in view.",
     "chests": 0,
     "recorderPrefix": "de2f7540",
-    "sessionPrefix": "569a73ac"
+    "sessionPrefix": "569a73ac",
+    "unrecorded": 1
   },
   {
     "file": "season12.replay",
     "note": "Fortnite 12.00: this older format replicates no container state the parsers can read, so nothing is attributed (identity checks only).",
     "chests": 0,
     "recorderPrefix": "03d767ef",
-    "sessionPrefix": "ab1301f4"
+    "sessionPrefix": "ab1301f4",
+    "unrecorded": 15
   },
   {
     "file": "season11.11.replay",
     "note": "Fortnite 11.11: identity checks only (no container state in this format).",
     "chests": 0,
     "recorderPrefix": "83e92edf",
-    "sessionPrefix": "ef8241b1"
+    "sessionPrefix": "ef8241b1",
+    "unrecorded": 12
   }
 ]

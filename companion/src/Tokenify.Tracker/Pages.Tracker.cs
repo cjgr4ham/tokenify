@@ -70,7 +70,8 @@ internal sealed class TrackingPage : Page
         _sessionMode.SetQuietly(t.SessionMode == "manual" ? 1 : 0);
         _gap.SetQuietly(t.SessionGapMinutes);
         _gap.Enabled = t.SessionMode != "manual";
-        if (_starting.Value != t.StartingTotal) _starting.Value = t.StartingTotal;
+        // not while it is being typed into: a snapshot arriving mid-number would wipe what was typed
+        if (!_starting.ContainsFocus && _starting.Value != t.StartingTotal) _starting.Value = t.StartingTotal;
         if (_useStart.Checked != (t.StartDate is not null)) _useStart.Checked = t.StartDate is not null;
         _start.Enabled = t.StartDate is not null;
         if (t.StartDate is { } d) _start.SetQuietly(d.Date);
@@ -301,6 +302,10 @@ internal sealed class AccountPage : Page
         var parts = new List<string> { s.SyncText };
         if (s.DeviceName is not null) parts.Add($"this PC is called \"{s.DeviceName}\" on the website");
         if (s.LastSyncUtc is { } t) parts.Add($"last match sent {Ui.Ago(t)}");
+        if (s.PartyChests > 0)
+        {
+            parts.Add($"squad total: {Fmt.Int(s.SquadTotal)} (yours {Fmt.Int(s.Stats.TotalChests)} + {Fmt.Int(s.PartyChests)} by party members in {s.PartyGames} squad game{(s.PartyGames == 1 ? "" : "s")})");
+        }
         if (s.Squad is { } q)
         {
             parts.Add($"last squad game: {q.Chests}{(q.Complete ? "" : "+")} chests"

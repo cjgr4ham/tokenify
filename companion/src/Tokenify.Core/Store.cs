@@ -301,10 +301,23 @@ public sealed class Store : IDisposable
     public MatchRow? GetMatch(long id) => Query("select * from matches where id = $id", MapMatch, ("$id", id)).FirstOrDefault();
 
     /// <summary>The stored match for this recording: same player and match key, or the same replay id.</summary>
-    public MatchRow? FindMatch(string playerHash, string matchKey, string? replayGuid) => Query("""
-        select * from matches where player_hash = $h and (match_key = $k or ($g is not null and replay_guid = $g))
+    /// <summary>The same match under its key, its recording id, or its file fingerprint (the same for every copy of
+    /// a replay): a match first stored without ids is found again when a later read does find them.</summary>
+    public MatchRow? FindMatch(string playerHash, string matchKey, string? replayGuid, string? fingerprint = null) => Query("""
+        select * from matches where player_hash = $h and (match_key = $k or ($g is not null and replay_guid = $g) or ($fp is not null and fingerprint = $fp))
         order by (match_key = $k) desc limit 1
-        """, MapMatch, ("$h", playerHash), ("$k", matchKey), ("$g", replayGuid?.ToLowerInvariant())).FirstOrDefault();
+        """, MapMatch, ("$h", playerHash), ("$k", matchKey), ("$g", replayGuid?.ToLowerInvariant()), ("$fp", fingerprint)).FirstOrDefault();
+
+    public const string NotMineReason = "another player's Fortnite account";
+
+    /// <summary>
+    /// "Not mine" for an account whose matches were already sent: they are left out here and, through the usual
+    /// correction sync, on the website too. Saying "mine" again puts back exactly those.
+    /// </summary>
+    public void SetSentExcludedForProfile(string playerHash, bool excluded) => Exec(excluded
+        ? "update matches set excluded = 1, correction_synced = 0, correction_reason = coalesce(correction_reason, $r), updated = $now where player_hash = $h and upload = 'sent' and excluded = 0"
+        : "update matches set excluded = 0, correction_synced = 0, correction_reason = null, updated = $now where player_hash = $h and upload = 'sent' and excluded = 1 and corrected is null and correction_reason = $r",
+        ("$h", playerHash), ("$r", NotMineReason), ("$now", Now()));
 
     public long InsertMatch(MatchRow m)
     {

@@ -6,7 +6,7 @@
 //   node e2e-tracker.mjs <TOKENIFY-Tracker.exe> <folder with sample .replay files>
 //
 // The sample replays are the public ones from Shiqan/FortniteReplayDecompressor (see
-// companion/tests/fixtures/README.md): chapter5season5 (player "SLxTnT", 5 chests), season12 (another player)
+// companion/tests/fixtures/README.md): chapter5season5 (player "SLxTnT": 5 chest records + 8 searches with no record = 13), season12 (another player)
 // and collectPickup (SLxTnT, but from 2020: older than TOKENIFY accepts).
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, copyFileSync, utimesSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
@@ -126,20 +126,20 @@ try {
   await sleep(24000);
   await stop(app); app = null;
   const offline = report(data1, demos, tmp);
-  ok(/ +5 chests .* pending /.test(offline), 'offline: the match is counted on the PC and waits to be sent: ' + ((offline.match(/^.* chests \(.*$/m) || ['(no match line)'])[0]).trim().slice(0, 110));
+  ok(/ +13 chests .* pending /.test(offline), 'offline: the match is counted on the PC and waits to be sent: ' + ((offline.match(/^.* chests \(.*$/m) || ['(no match line)'])[0]).trim().slice(0, 110));
   ok((await rpc(pcp, 'tk_replay_matches')).matches.length === 0, 'offline: nothing reached TOKENIFY yet');
 
   // 2. run the tracker online: it confirms the player's Fortnite account and uploads the waiting match
   app = start(data1, demos);
   const first = await until('the first match', async () => { const r = await rpc(pcp, 'tk_replay_matches'); return r.matches && r.matches.length >= 1 ? r : null; });
   const m = first.matches[0];
-  ok(m.chests === 5 && m.chest_times.length === 5, 'match imported with 5 chests and their times');
+  ok(m.chests === 13 && m.chest_times.length === 13, 'match imported with 13 chests and their times');
   ok(m.historical === true, 'an older replay is imported as history, never into a live session');
-  ok(m.has_match_id === true && m.parser_version === '2.0.0', 'with the Fortnite match id and counting-rules version 2.0.0');
-  ok(m.breakdown && Object.values(m.breakdown).every((v) => Number.isInteger(v)) && (m.breakdown.searched ?? 0) + (m.breakdown.destroyed ?? 0) === 5,
+  ok(m.has_match_id === true && m.parser_version === '2.1.0', 'with the Fortnite match id and counting-rules version 2.1.0');
+  ok(m.breakdown && Object.values(m.breakdown).every((v) => Number.isInteger(v)) && (m.breakdown.searched ?? 0) + (m.breakdown.destroyed ?? 0) === 13 && m.breakdown.unrecorded === 8,
     'and the opened/destroyed split adds up to the count: ' + JSON.stringify(m.breakdown));
   const st = await rpc(pcp, 'tk_pc_tracking_state');
-  ok(st.devices.length === 1 && st.devices[0].app_version === '2.0.0', 'the website lists the PC with the tracker version');
+  ok(st.devices.length === 1 && st.devices[0].app_version === '2.1.0', 'the website lists the PC with the tracker version');
   ok(st.profiles.length === 1 && st.profiles[0].label === 'SLxTnT', "the replay's Fortnite account was linked (SLxTnT)");
   await until('a status check-in', async () => { const s = (await rpc(pcp, 'tk_pc_tracking_state')).devices[0]; return s && s.status && s.status.state ? s : null; });
   const dev = (await rpc(pcp, 'tk_pc_tracking_state')).devices[0];
@@ -152,7 +152,7 @@ try {
   app = start(data1, demos);
   const fixed = await until('the correction to reach the website', async () => {
     const x = (await rpc(pcp, 'tk_replay_matches')).matches[0]; return x && x.corrected_chests === 7 ? x : null; });
-  ok(fixed.chests === 7 && fixed.replay_chests === 5, 'the website shows 7 with the replay count 5 kept beside it');
+  ok(fixed.chests === 7 && fixed.replay_chests === 13, 'the website shows 7 with the replay count 13 kept beside it');
 
   // 2c. a correction made on the website reaches the tracker (picked up when it next starts)
   ok((await rpc(pcp, 'tk_replay_correct', { p_match: fixed.id, p_chests: 6, p_reason: 'changed on the website' })).ok, 'count changed to 6 on the website');
@@ -172,7 +172,7 @@ try {
   ok(run(['--correct', 'latest', 'include'], data1, demos).status === 0 && run(['--correct', 'latest', 'none'], data1, demos).status === 0, 'put back, correction removed');
   app = start(data1, demos);
   const restored = await until('the website to follow', async () => { const x = (await rpc(pcp, 'tk_replay_matches')).matches[0]; return x && x.excluded === false && x.corrected_chests === null ? x : null; });
-  ok(restored.chests === 5, 'back to the replay count of 5 on the website');
+  ok(restored.chests === 13, 'back to the replay count of 13 on the website');
 
   // 3. another player's replay on the same PC: asked about, never uploaded
   place('season12.replay', demos, 'UnsavedReplay-2026.11.09-21.00.00.replay', new Date());
@@ -195,12 +195,12 @@ try {
   app = start(data2, demos);
   await until('the reinstalled tracker to check in', async () => (await rpc(pcp, 'tk_pc_tracking_state')).devices.some((d) => d.last_sync_at && d.app_version) ? true : null);
   const log2 = path.join(data2, 'companion.log');
-  const sent = await until('the reinstalled tracker to re-send', async () => existsSync(log2) && /Sent [^\n]*replay: 5 chests/.test(readFileSync(log2, 'utf8')) ? true : null, 90000)
+  const sent = await until('the reinstalled tracker to re-send', async () => existsSync(log2) && /Sent [^\n]*replay: 13 chests/.test(readFileSync(log2, 'utf8')) ? true : null, 90000)
     .catch(() => false);
   const after = await rpc(pcp, 'tk_replay_matches');
-  ok(after.matches.length === 1 && after.matches[0].chests === 5, 'still one match with 5 chests (nothing counted twice)');
+  ok(after.matches.length === 1 && after.matches[0].chests === 13, 'still one match with 13 chests (nothing counted twice)');
   const lines = existsSync(log2) ? readFileSync(log2, 'utf8').split(/\r?\n/).filter((l) => /Sent |refused|Linked/.test(l)) : [];
-  ok(sent && lines.some((l) => /5 chests \(unchanged\)/.test(l)), 'the server answered "unchanged": ' + JSON.stringify(lines.map((l) => l.slice(20))));
+  ok(sent && lines.some((l) => /13 chests \(unchanged\)/.test(l)), 'the server answered "unchanged": ' + JSON.stringify(lines.map((l) => l.slice(20))));
 
   // 6. revoking the PC on the website stops it
   const devs = (await rpc(pcp, 'tk_pc_tracking_state')).devices;

@@ -22,6 +22,7 @@ public static class Metric
     public const string AverageToToken = "avg_token";
     public const string Eta = "eta";
     public const string Squad = "squad";
+    public const string SquadTotal = "squad_total";
     public const string Sync = "sync";
     public const string Status = "status";
 
@@ -46,6 +47,7 @@ public static class Metric
         ("Status", Status, "Match status", "Match in progress, reading replay, last match imported..."),
         ("Status", Sync, "Website sync", "Whether everything has reached TOKENIFY."),
         ("Status", Squad, "Squad chests, last game", "Your party's total for the last match, when TOKENIFY has it."),
+        ("Status", SquadTotal, "Squad total", "Your total plus what your party members opened in squad games with you. Appears by itself once there is any."),
     ];
 
     public static string Label(string id) => All.FirstOrDefault(m => m.Id == id).Label ?? id;

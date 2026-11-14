@@ -195,6 +195,20 @@
       chest_times: o.times || Array.from({ length: n }, function (_, i) { return 20 + i * 25; }), historical: !!o.historical, excluded: !!o.excluded,
       auto_session: o.auto || 'auto-1', updated_at: o.v || '2026-11-10T10:00:00.000Z', party: null };
   }
+  test('Replay imports', 'a match covering two hand-counted games replaces both, never on top (20 + 15 by hand, replay 37 = 37)', function () {
+    var m = fresh().m;
+    m.startSession();
+    var t0 = fake.wall;
+    for (var i = 0; i < 20; i++) { advance(10000); m.addChest(); }
+    m.endGame();   // the game key pressed mid-match
+    for (var j = 0; j < 15; j++) { advance(10000); m.addChest(); }
+    advance(30000);
+    assert(m.total() === 35, 'hand count is 35 before the replay, got ' + m.total());
+    var r = m.applyReplay(match({ start: t0, len: 8 * MIN, chests: 37 }), 'auto');
+    assert(r.action === 'reconciled', 'reconciled with the hand-counted games, got ' + r.action);
+    assert(m.total() === 37, 'the total is the replay count 37, got ' + m.total());
+    assert(m.applyReplay(match({ id: r.game.replay.id, start: t0, len: 8 * MIN, chests: 37 }), 'auto').action === 'none' && m.total() === 37, 'and the same match again changes nothing');
+  });
   test('Replay imports', 'an imported match becomes one game in an automatic session', function () {
     var m = fresh().m, x = match({ chests: 37 });
     var r = m.applyReplay(x, 'auto');

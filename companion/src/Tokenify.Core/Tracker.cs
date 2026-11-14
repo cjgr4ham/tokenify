@@ -46,7 +46,15 @@ public sealed record TrackerSnapshot(
     DateTime SeasonStartUtc,
     int NeedsReview,
     SquadInfo? Squad,
-    int ManualTaps);
+    int ManualTaps)
+{
+    /// <summary>Chests the player's party members opened in squad games with them this season (known counts only).</summary>
+    public int PartyChests { get; init; }
+    /// <summary>How many squad games that covers.</summary>
+    public int PartyGames { get; init; }
+    /// <summary>The player's own total plus <see cref="PartyChests"/>.</summary>
+    public int SquadTotal => Stats.TotalChests + PartyChests;
+}
 
 /// <summary>
 /// The tracker's background work, on two low-priority threads:
@@ -478,7 +486,8 @@ public sealed class Tracker : IDisposable
             Build = result.Branch,
             Historical = historical,
         };
-        if (!match.HasServerIdentity) match.Fingerprint = Fingerprint(f.FullName);
+        // Always kept, also when the match has ids: it is what ties a later read to this row if the ids differ.
+        match.Fingerprint = Fingerprint(f.FullName);
         match.Upload = decision switch
         {
             "not-mine" => Upload.NotMine,
@@ -493,7 +502,7 @@ public sealed class Tracker : IDisposable
             return;
         }
 
-        var existing = _store.FindMatch(hash, match.MatchKey, match.ReplayGuid);
+        var existing = _store.FindMatch(hash, match.MatchKey, match.ReplayGuid, match.Fingerprint);
         long id;
         if (existing is null)
         {
@@ -518,7 +527,9 @@ public sealed class Tracker : IDisposable
                 match.Id = existing.Id;
                 // A re-read never changes whose match it is or a decision the player already made about it.
                 match.Upload = existing.Upload is Upload.NotMine or Upload.Ignored ? existing.Upload
-                    : existing.Upload == Upload.Sent && existing.Chests == match.Chests && existing.Times == match.Times && existing.Status == match.Status ? Upload.Sent
+                    // (a changed key is sent again, so the website learns the match's new id and later corrections find it)
+                    : existing.Upload == Upload.Sent && existing.Chests == match.Chests && existing.Times == match.Times && existing.Status == match.Status
+                      && existing.MatchKey == match.MatchKey ? Upload.Sent
                     : match.Upload;
                 match.Historical = existing.Historical;
                 _store.UpdateParsed(match);
@@ -616,12 +627,19 @@ public sealed class Tracker : IDisposable
             _store.SetUploadForProfile(hash, Upload.HeldProfile, Upload.Pending);
             _store.SetUploadForProfile(hash, Upload.NotMine, Upload.Pending);
             _store.SetUploadForProfile(hash, Upload.Conflict, Upload.Pending);
+            _store.SetSentExcludedForProfile(hash, false);
         }
         else
         {
             _store.SetUploadForProfile(hash, Upload.HeldProfile, Upload.NotMine);
             _store.SetUploadForProfile(hash, Upload.Pending, Upload.NotMine);
             _store.SetUploadForProfile(hash, Upload.LocalOnly, Upload.NotMine);
+            // Matches of that account that already went to TOKENIFY are left out here and there.
+            _store.SetSentExcludedForProfile(hash, true);
+            if (Credentials.Load(_store) is not null && _store.AllMatchesLight().Any(m => m.PlayerHash == hash && m.Upload == Upload.Sent))
+            {
+                RaiseNotify("TOKENIFY", "That account's matches are being taken out of your TOKENIFY totals. To unlink the Fortnite account itself, use the website: Automatic PC tracking, Fortnite accounts.");
+            }
         }
         Log.Info($"Fortnite account {hash[..8]}… marked as {(mine ? "mine" : "not mine")}");
         SyncNow();
@@ -831,10 +849,17 @@ public sealed class Tracker : IDisposable
 
     public void ResetSettings()
     {
+        var countedDestroyed = _settings.Tracking.CountDestroyed;
         _store.ResetSettings();
         lock (_gate) { _settings = _store.LoadSettings(); }
         _settings.General.SetupDone = true;
         _store.SaveSettings(_settings);
+        if (_settings.Tracking.CountDestroyed != countedDestroyed)
+        {
+            // what was sent used the old rule: send those matches again so the website shows the same numbers
+            _store.RequeueSent(true);
+            SyncNow();
+        }
         Log.Info("Settings reset to defaults");
         Publish();
     }
@@ -915,6 +940,7 @@ public sealed class Tracker : IDisposable
         }
         Credentials.Clear(_store);
         _store.Set("squad.last", null);
+        _store.Set("squad.season", null);
         lock (_gate) { _username = null; _deviceName = null; _revoked = false; }
         Log.Info("Disconnected from TOKENIFY");
         Publish();
@@ -1182,6 +1208,7 @@ public sealed class Tracker : IDisposable
         }
         SetSeasonStart(r.Str("season_start"));
         _store.Set("squad.last", r.Body?["squad"] is JsonObject squad ? squad.ToJsonString() : null);
+        _store.Set("squad.season", r.Body?["squad_season"] is JsonObject season ? season.ToJsonString() : null);
 
         var serverProfiles = (r.Body?["profiles"] as JsonArray)?.Select(p => ApiResult.Text(p?["player_hash"])).Where(h => h is not null).ToHashSet() ?? new();
         foreach (var p in _store.Profiles().Where(p => p.Decision == "mine"))
@@ -1367,7 +1394,24 @@ public sealed class Tracker : IDisposable
 
         return new TrackerSnapshot(settings, stats, activity, status, sync, syncText, paired, username, deviceName, online, folderPath, folder, files,
             queued, attention, lastMatch, lastSync, held, hFrom, hTo, unsupported, ask, active,
-            fileRows.Count(f => f.State == "pre-season"), SeasonStartUtc, review, ReadSquad(), taps);
+            fileRows.Count(f => f.State == "pre-season"), SeasonStartUtc, review, ReadSquad(), taps)
+        {
+            PartyChests = paired ? ReadSeason("mates_chests") : 0,
+            PartyGames = paired ? ReadSeason("games") : 0,
+        };
+    }
+
+    private int ReadSeason(string key)
+    {
+        if (_store.Get("squad.season") is not { Length: > 0 } json) return 0;
+        try
+        {
+            return Math.Max(0, ApiResult.Int((JsonNode.Parse(json) as JsonObject)?[key]) ?? 0);
+        }
+        catch (JsonException)
+        {
+            return 0;
+        }
     }
 
     private SquadInfo? ReadSquad()

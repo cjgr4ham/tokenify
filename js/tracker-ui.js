@@ -43,7 +43,8 @@
   // number is the chests of the player's latest play session rather than a bare 0.
   function autoView() {
     var pc = TK.pc && TK.pc.state ? TK.pc.state() : null;
-    if (!pc || pc.tracking !== 'auto' || model.session()) return null;
+    // only with a PC actually linked: without one nothing counts by itself, whatever the setting says
+    if (!pc || pc.tracking !== 'auto' || !(pc.devices && pc.devices.length) || model.session()) return null;
     var s = model.state, best = null, lastGame = {};
     s.gameOrder.forEach(function (gid) { var g = s.games[gid]; if (g && g.status !== 'void') lastGame[g.sid] = g; });
     s.sessionOrder.forEach(function (id) {
@@ -71,7 +72,7 @@
     }
     lastCount = count;
     var blockedPlus = !isOwner || (st === 'paused' && !opt('trkAutoResumeCount'));
-    els.plus.disabled = blockedPlus; els.minus.disabled = !isOwner || count <= 0;
+    els.plus.disabled = blockedPlus; els.minus.disabled = !isOwner || count <= 0 || !!auto;   // nothing to take away from a replay's count
     els.view.classList.toggle('is-paused', st === 'paused'); els.view.classList.toggle('is-elsewhere', !isOwner);
     els.hint.innerHTML = !isOwner ? 'Counting is paused in this tab to prevent double counting.' : st === 'paused' ? 'Paused — resume to keep counting' + (opt('trkAutoResumeCount') ? ' (or press <kbd>Space</kbd> to resume and count)' : '') : auto ? 'Your PC counts for you: each match is added a few seconds after it ends. Nothing to press.'
       : 'Press <kbd>Space</kbd> for every chest' + (opt('trkNKey') ? ' · <kbd>N</kbd> ends the game' : '');

@@ -295,6 +295,14 @@ public static partial class Tests
         var squadFull = Display.Build(Snap(stats, squad: new SquadInfo(140, true, 4, 4, null)), [Metric.Total, Metric.Squad]);
         True(!squadFull.Rows[0].Dim && squadFull.Rows[0].Value == "140", "a complete one is shown plainly");
 
+        // Squad total: the player's own total plus the party's, as one extra row, only once there is any.
+        True(Display.Build(Snap(stats), Metric.Minimal).Rows.All(r => r.Label != "SQUAD TOTAL"), "no squad row without party chests");
+        var party = Display.Build(Snap(stats) with { PartyChests = 216, PartyGames = 3 }, Metric.Minimal);
+        Eq("1,284", party.Hero.Value, "the player's own total is untouched");
+        Eq("SQUAD TOTAL", party.Rows[^1].Label, "one extra row, by itself");
+        Eq("1,500", party.Rows[^1].Value, "own total + party members' chests");
+        Eq(1, Display.Build(Snap(stats) with { PartyChests = 216 }, [Metric.Total, Metric.SquadTotal]).Rows.Count(r => r.Label == "SQUAD TOTAL"), "never shown twice");
+
         var toast = Display.Build(Snap(stats), Metric.Minimal, "+42 CHESTS");
         Eq("+42 CHESTS", toast.Toast, "toast");
         True(toast.Signature != minimal.Signature, "signature changes with the toast");
@@ -431,6 +439,28 @@ public static partial class Tests
         noIds.Fingerprint = "feedfacefeedfacefeedfacefeedface";
         Eq("fp:feedfacefeedfacefeedfacefeedface", noIds.MatchKey, "a replay without ids is known by its fingerprint");
         True(!noIds.HasServerIdentity, "and is kept local");
+
+        // Stored without ids first; a later read of the same file does find an id: it must be the same row, not a second game.
+        noIds.Started += 3_600_000;
+        noIds.Ended += 3_600_000;
+        var fpId = store.InsertMatch(noIds);
+        var later = store.FindMatch("me", "fn:found-later-0001", null, "feedfacefeedfacefeedfacefeedface");
+        Eq(fpId, later!.Id, "found again by its fingerprint when the key has changed");
+        True(store.FindMatch("me", "fn:found-later-0001", null, "0123456789abcdef0123456789abcdef") is null, "another recording is not mistaken for it");
+        True(store.FindMatch("someone-else", "fn:found-later-0001", null, "feedfacefeedfacefeedfacefeedface") is null, "nor another player's");
+
+        // "Not mine" after matches were already sent: they are left out (and queued to be left out on the website);
+        // "mine" again puts back exactly those, and never a match the player left out for another reason.
+        store.MarkSent(id, "server-1", 12, "created");
+        store.MarkSent(fpId, "server-2", 3, "created");
+        store.SetExcluded(fpId, true);                       // the player's own choice, made earlier
+        store.MarkCorrectionSynced(fpId);
+        store.SetSentExcludedForProfile("me", true);
+        True(store.GetMatch(id)!.Excluded && !store.GetMatch(id)!.Valid, "a sent match of that account no longer counts");
+        True(store.UnsyncedCorrections().Any(x => x.Id == id), "and the exclusion is queued for the website");
+        store.SetSentExcludedForProfile("me", false);
+        True(!store.GetMatch(id)!.Excluded, "saying 'mine' again puts it back");
+        True(store.GetMatch(fpId)!.Excluded, "a match the player had left out themselves stays out");
     }
 
     private static void CorrectionHistory()
@@ -629,9 +659,9 @@ public static partial class Tests
         }
 
         var demos = Path.GetDirectoryName(TempFile("x"))!;
-        File.Copy(Src("03"), Path.Combine(demos, Demo("03")));   // 11 chests (1 destroyed)
+        File.Copy(Src("03"), Path.Combine(demos, Demo("03")));   // 11 chest records (1 destroyed) + 10 searches with no record = 21
         File.Copy(Src("08"), Path.Combine(demos, Demo("08")));   // 0 chests
-        File.Copy(Src("01"), Path.Combine(demos, Demo("01")));   // 2 chests (1 destroyed), 4 ambiguous
+        File.Copy(Src("01"), Path.Combine(demos, Demo("01")));   // 2 chest records (1 destroyed) + 4 searches with no record = 6; 4 ambiguous
 
         using var store = new Store(TempFile("companion.db"));
         store.Set("history.cutoff", "0");   // these replays are "new", not history
@@ -649,9 +679,9 @@ public static partial class Tests
         WaitFor(() => store.AllMatchesLight().Count == 3, 90, "three matches");
         var snap = tracker.Snapshot();
         Eq(3, snap.Stats.Games, "valid games (the zero-chest game is one of them)");
-        Eq(13, snap.Stats.TotalChests, "total chests");
-        Near(13 / 3.0, snap.Stats.Cpg, "CPG");
-        Eq(11, snap.Stats.Best, "best game");
+        Eq(27, snap.Stats.TotalChests, "total chests (21 + 0 + 6)");
+        Near(27 / 3.0, snap.Stats.Cpg, "CPG");
+        Eq(21, snap.Stats.Best, "best game");
         Eq("LAST 3", snap.Stats.Last10.Label, "recent label");
         Eq(SyncState.NotLinked, snap.Sync, "works without a TOKENIFY account");
         Eq(0, snap.Queued, "nothing queued without an account");
@@ -660,8 +690,8 @@ public static partial class Tests
         lock (imported) Eq(3, imported.Count, "each match announced once");
         var byFile = store.AllMatches().ToDictionary(m => m.File[^9..^7]);   // the sample's number
         Eq(4, byFile["01"].Ambiguous, "ambiguous chests are stored");
-        Eq(2, byFile["01"].Chests, "and are not in the count");
-        Eq(6, Tracker.EventsOf(byFile["01"]).Count, "the events are kept with the match");
+        Eq(6, byFile["01"].Chests, "and are not in the count");
+        Eq(10, Tracker.EventsOf(byFile["01"]).Count, "the events are kept with the match");
         Eq(1, byFile["03"].Destroyed, "destroyed chests are told apart");
 
         // 2. a renamed copy and a rescan never add a match
@@ -669,7 +699,7 @@ public static partial class Tests
         tracker.Rescan();
         WaitFor(() => store.Files().Count(f => f.State == "done") == 4, 90, "the copy and the rescan to be read");
         Eq(3, store.AllMatchesLight().Count, "still three matches");
-        Eq(13, tracker.Snapshot().Stats.TotalChests, "total unchanged");
+        Eq(27, tracker.Snapshot().Stats.TotalChests, "total unchanged");
         lock (imported) Eq(3, imported.Count, "nothing announced twice");
 
         // 3. a damaged file and a cut-off file are never a zero-chest game
@@ -684,7 +714,7 @@ public static partial class Tests
             () => string.Join("; ", store.Files().Select(f => $"{(f.Name.Length > 22 ? f.Name[^22..] : f.Name)}={f.State}{(f.Error is null ? "" : " (" + f.Error + ")")}")));
         snap = tracker.Snapshot();
         Eq(3, snap.Stats.Games, "damaged files add no game");
-        Near(13 / 3.0, snap.Stats.Cpg, "CPG unchanged");
+        Near(27 / 3.0, snap.Stats.Cpg, "CPG unchanged");
         var partial = store.AllMatchesLight().FirstOrDefault(m => m.Partial);
         if (partial is not null)
         {
@@ -694,35 +724,35 @@ public static partial class Tests
 
         // 4. corrections change the statistics, never the replay's own count
         var two = byFile["01"];
-        tracker.Correct(two.Id, 6, "the four ship chests were mine");
+        tracker.Correct(two.Id, 10, "the four ship chests were mine");
         snap = tracker.Snapshot();
-        Eq(17, snap.Stats.TotalChests, "total follows the correction");
+        Eq(31, snap.Stats.TotalChests, "total follows the correction (21 + 0 + 10)");
         Eq(0, snap.NeedsReview, "a corrected match is reviewed");
-        Eq(2, store.GetMatch(two.Id)!.Chests, "replay count kept");
+        Eq(6, store.GetMatch(two.Id)!.Chests, "replay count kept");
         Eq(Category.UserCorrected, store.GetMatch(two.Id)!.Category, "category");
         tracker.Correct(two.Id, null, null);
-        Eq(13, tracker.Snapshot().Stats.TotalChests, "removing it restores the replay count");
+        Eq(27, tracker.Snapshot().Stats.TotalChests, "removing it restores the replay count");
 
         // 5. choices: leave a match out, don't count destroyed chests
         tracker.SetExcluded(byFile["08"].Id, true);
         Eq(2, tracker.Snapshot().Stats.Games, "a match set aside is not a game");
         tracker.SetExcluded(byFile["08"].Id, false);
         tracker.UpdateSettings(s => s.Tracking.CountDestroyed = false);
-        Eq(11, tracker.Snapshot().Stats.TotalChests, "without destroyed chests: 10 + 0 + 1");
+        Eq(25, tracker.Snapshot().Stats.TotalChests, "without destroyed chests: 20 + 0 + 5");
         tracker.UpdateSettings(s => s.Tracking.CountDestroyed = true);
-        Eq(13, tracker.Snapshot().Stats.TotalChests, "and back");
+        Eq(27, tracker.Snapshot().Stats.TotalChests, "and back");
 
         // 6. everything survives a restart
         tracker.Dispose();
         using var reopened = new Tracker(store);
         var after = reopened.Snapshot();
-        Eq(13, after.Stats.TotalChests, "total after restart");
+        Eq(27, after.Stats.TotalChests, "total after restart");
         Eq(3, after.Stats.Games, "games after restart");
         Eq(demos, after.Settings.Tracking.ReplayFolder, "settings after restart");
 
         // 7. history survives the replays being deleted
         foreach (var f in Directory.GetFiles(demos, "*.replay")) File.Delete(f);
-        Eq(13, reopened.Snapshot().Stats.TotalChests, "total after the replays are gone");
-        Eq(6, Tracker.EventsOf(store.GetMatch(two.Id)!).Count, "evidence still there");
+        Eq(27, reopened.Snapshot().Stats.TotalChests, "total after the replays are gone");
+        Eq(10, Tracker.EventsOf(store.GetMatch(two.Id)!).Count, "evidence still there");
     }
 }

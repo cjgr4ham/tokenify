@@ -43,6 +43,12 @@ public static class Display
             }
         }
 
+        // Party members' chests: one extra row, by itself, only once there are any (the small view stays small).
+        if (s.PartyChests > 0 && !metrics.Contains(Metric.SquadTotal) && Item(s, Metric.SquadTotal) is { } squadTotal)
+        {
+            rows.Add(squadTotal);
+        }
+
         // The player's own running count for the match being played, when they use the manual shortcut.
         if (s.Settings.Shortcuts.ManualEnabled && s.Activity == Activity.InMatch && s.ManualTaps > 0)
         {
@@ -89,6 +95,7 @@ public static class Display
                 ? new MetricItem(id, q.Complete ? "SQUAD LAST GAME" : q.Members > q.Reported ? $"SQUAD ({q.Reported}/{q.Members})" : "SQUAD SO FAR",
                     Fmt.Int(q.Chests) + (q.Complete ? "" : "+"), Dim: !q.Complete)
                 : new MetricItem(id, "SQUAD LAST GAME", "—", Dim: true),
+            Metric.SquadTotal => new MetricItem(id, "SQUAD TOTAL", Fmt.Int(s.SquadTotal), Dim: s.PartyChests == 0),
             Metric.Sync => new MetricItem(id, "WEBSITE", s.Sync switch
             {
                 SyncState.UpToDate => "SYNCED",

@@ -10,26 +10,30 @@ How things were tested:
 
 | Name used below | What it is |
 |---|---|
-| **unit** | `Tokenify.Tests.exe test`: 119 automated checks of the engine, the evidence rules, statistics, the database, exports, updates, overlay placement and drawing |
+| **unit** | `Tokenify.Tests.exe test`: 138 automated checks of the engine, the evidence rules, statistics, the database, exports, updates, overlay placement and drawing |
 | **reader check** | `TOKENIFY-Tracker.exe --check-replay`: the real program reading a replay in its separate reader process, without any window |
-| **real replays** | the same run, on 11 matches of the current season (48 chests) and 4 public sample replays of older seasons |
+| **real replays** | the same run, on 14 matches of the current season (one of them hand-counted) and 4 public sample replays of older seasons |
 | **self-test** | `TOKENIFY-Tracker.exe --selftest`: the final single-file exe with real windows on a test data folder, 35 checks, at 100%, 125% and 150% display scaling |
-| **backend** | `node dev/test-backend.mjs`: 371 checks of the website's server rules in a local database |
-| **end-to-end** | `node dev/e2e-tracker.mjs`: the tracker against the local test backend, 31 checks plus 4 for last season's replays. Run with the debug build of the final source: the antivirus on the test PC removed the single-file exe part-way through that run (see Known limits) |
+| **backend** | `node dev/test-backend.mjs`: 373 checks of the website's server rules in a local database |
+| **end-to-end** | `node dev/e2e-tracker.mjs`: the tracker against the local test backend, 31 checks plus 4 for last season's replays. For 2.1 it ran with the final single-file exe. For 2.0 it ran with the debug build of the same source, because the antivirus on the test PC removed the single-file exe part-way through that run (see Known limits) |
 | **by eye** | pictures of every window and overlay layout, drawn by the app itself and looked at |
 
 ## Counting
 
 | Behaviour | Status | Evidence |
 |---|---|---|
-| Normal chest searches count correctly | **Verified against two independent parsers; not hand-counted** | real replays: 45 opened chests in 11 current-season matches, the same totals as the rossalv and LED-N parsers; public samples agree across three parsers |
+| Chests the replay holds a record for (buried, Sprite, and ordinary ones when recorded) | **Agrees with two independent parsers; not hand-counted** | real replays: 60 chest records in 14 current-season matches; the 11 older baselines give the same totals as the rossalv and LED-N parsers; public samples agree across three parsers. Agreement only shows that three programs read the same fields, not that the fields are complete |
+| Ordinary chests the replay holds **no** record for | **Checked against one hand-counted match: 7 of 8 found. Otherwise unverified** | Version 2.0 claimed ordinary chests were verified. That was wrong. In most of this player's 23 replays the game wrote no ordinary chest, no opened state and no loot into the replay at all, and the count was far too low. Since 2.1 the player's own character is used instead: it carries a "started searching" flag for as long as a search lasts. In the hand-counted match (7 ordinary chests and 1 Sprite chest reported by the player) the replay holds one chest record and seven searches; 2.0 counted 1, 2.1 counts 7. Across the 23 replays, 106 searches are followed within 2.5 s by a chest record naming the player (counted once, from the record, as before) and 201 by none (now counted as type "not recorded") |
+| What an unrecorded search opened | **Not recorded: known limit** | the flag is the same for a chest, an ammo box, a cooler or anything else that is searched. When the replay does hold the ammo box's record it is left out, as before; when it does not, the search counts. A search you let go of early cannot be told from a finished one |
+| Searches on the warm-up island, held too long, or with no visible end | **Verified in the rules** | unit: before the bus drop they are ignored; held over 3 s, never ending, or at the same moment as another player's recorded opening they are listed for review and not counted (3 such cases in the 14 current-season matches) |
+| Time after a reboot | **Not recorded in some matches: known limit, reported** | in 7 of the 23 replays the game wrote two or three updates of the player's new character in several minutes, so nothing they did can be seen. Each such stretch is listed with its times under the match, and the count is called a minimum. Nothing is added for it |
 | Destroyed chests count when the game names you | **Verified on 3 real cases** | real replays: 3 destroyed chests (2 with the Gum-Gum Fruit, 1 broken with its structure), each recorded by the game as destroyed with the recording player named |
 | Destroyed chests you never had on screen | **Verified** | the chest's state arrives together with the chest when it was not being tracked before; counted like any other (unit: dormant chest; real replays: "arrived with the chest" signal) |
 | Several chests destroyed at once are separate events | **Verified in the rules; not verified in a real match** | unit: simultaneous events are kept per chest; in the one real case (below) four simultaneous removals are recorded as four events, not one. No real sample shows several chests *named* in one attack |
 | Duplicate updates of one chest do not count twice | **Verified** | unit (repeated state, chest leaving and re-entering view, searched-then-destroyed counts once); real replays read twice give identical results |
 | A refilled chest opened again counts again | **Verified in the rules** | unit; no current-season sample contains one |
 | Other players' chests are never yours | **Verified** | unit (another opener, another opener seen again later); real replays hold other players' chests and totals still match the independent parsers |
-| Ammo boxes, food boxes, loot cannons are not chests | **Verified** | unit (registry); real replays |
+| Ammo boxes, food boxes, loot cannons are not chests | **Verified when the replay records them** | unit (registry); real replays. See the row on unrecorded searches for when it does not |
 | Unknown chest-like class | **Verified** | unit: counted and flagged "unverified" |
 | Unsupported, cut-off, damaged, still-recording replays are recognised | **Verified** | unit: header checks, a truncated real replay is never reported complete, damaged bytes never raise the count, an empty file is never zero chests |
 | Nothing is invented where the replay is silent | **Verified** | real replays: 29 chest removals with no record are noted as a number only; 4 ambiguous events are stored and not counted |
@@ -128,17 +132,35 @@ Tested on one 1920×1080 display at 125% scaling, with real windows, without For
 
 ## Independent code review
 
-A separate review pass (a reviewer, then a sceptic who tried to refute each finding against the source) covered
-**one of five areas**: the updater, stored credentials, the replay-reader process, start-up and single-instance
-handling. It confirmed 12 defects, none in counting; all are fixed. The other four areas (counting engine, tracker
-engine and storage, overlay and windows, server functions and website scripts) have **not** had that independent
-review; they are covered by the tests above only.
+A separate review pass (a reviewer, then a sceptic who tried to refute each finding against the source) has now
+covered all five areas.
+
+- Updater, stored credentials, replay-reader process, start-up and single-instance handling: 12 defects confirmed,
+  none in counting; all fixed in 2.0.
+- Counting engine, tracker engine and storage, overlay and windows, server functions and website scripts: 26
+  defects confirmed, 12 refuted. Twelve are fixed in 2.1: a replay with skipped damaged blocks is partial, never
+  complete; a match is found again by its file fingerprint; a match whose id changed is sent again; "not mine" also
+  takes already sent matches out; resetting settings re-sends what used the old rule; extreme display scales;
+  typing a starting total; Enter in the link-code box; several hand-counted games inside one replay match; the
+  automatic view without a linked PC; the minus button on replay counts.
+- Still open (14): releasing a Fortnite account does not recompute held matches; a re-queue made while an upload is
+  in flight can be overwritten; matches of a conflicting account can fill the 25-row upload window; overlay drag
+  state when locked or hidden mid-drag, or after a lost mouse-up; replay games attach to any open manual session
+  however old; local adjustments on replay games are overwritten; a reused reader stays partial; the analyser
+  counts a copied replay twice in totals; `-expect` passes when expected replays are missing; re-reading an
+  accepted partial match resets it; a correction always sends both correction and exclusion; a shortcut already
+  in use cannot be recorded again; the metrics list is refilled on every refresh.
+
+The review did not find the ordinary-chest gap described under Counting. A player's hand count did.
 
 ## Known limits
 
 1. Gum-Gum multi-chest destruction is unverified (see above). Until a hand-counted sample exists, such chests may
    appear as *ambiguous* and need a click to add.
-2. Counts are checked against other parsers, not against a hand count made while playing.
+2. Counts are checked against other parsers and against **one** hand-counted match (7 of 8 found). That is thin.
+   Chests counted from the player's own search have no type: an ammo box or a search let go of early counts the
+   same. In some matches the time after a reboot is not in the replay at all; the tracker says so and does not
+   guess.
 3. The overlay has not been looked at over the running game on this PC, and never works over exclusive Fullscreen.
 4. One display, one scaling factor on the test PC. Other scales were simulated for the windows.
 5. A new Fortnite version can change the replay format. Unreadable replays are kept and never counted as zero, but

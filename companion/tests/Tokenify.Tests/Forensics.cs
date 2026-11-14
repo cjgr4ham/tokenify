@@ -11,6 +11,25 @@ namespace Tokenify.Tests;
 ///   Tokenify.Tests.exe probe [file-or-folder] [--events] [--timelines] [--census] [--rpc-census] [--movement]
 ///        [--groups regex] [--field-filter regex] [--spawns regex] [--keywords regex] [--all-paths]
 /// </summary>
+public sealed class CountingLogger : Microsoft.Extensions.Logging.ILogger
+{
+    public sealed class Entry { public int Count; public float First = float.MaxValue, Last; public List<string> Examples = new(); public Dictionary<int, int> PerMinute = new(); }
+    public Dictionary<string, Entry> Seen { get; } = new(StringComparer.Ordinal);
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+    public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel level) => level >= Microsoft.Extensions.Logging.LogLevel.Warning;
+    public void Log<TState>(Microsoft.Extensions.Logging.LogLevel level, Microsoft.Extensions.Logging.EventId id, TState state, Exception? ex, Func<TState, Exception?, string> formatter)
+    {
+        if (!IsEnabled(level)) return;
+        var template = state is IEnumerable<KeyValuePair<string, object?>> kv ? kv.FirstOrDefault(p => p.Key == "{OriginalFormat}").Value?.ToString() : null;
+        var key = level + ": " + (template ?? formatter(state, ex)) + (ex is not null ? "  <" + ex.GetType().Name + ">" : "");
+        if (!Seen.TryGetValue(key, out var e)) Seen[key] = e = new Entry();
+        var now = Tokenify.ReplayReader.FortniteReplayBase.Clock;
+        e.Count++; e.First = Math.Min(e.First, now); e.Last = Math.Max(e.Last, now);
+        var minute = (int)(now / 60); e.PerMinute[minute] = e.PerMinute.GetValueOrDefault(minute) + 1;
+        if (e.Examples.Count < 4) { var text = formatter(state, ex) + (ex is not null ? "  <" + ex.Message + ">" : ""); if (!e.Examples.Contains(text)) e.Examples.Add(text.Length > 260 ? text[..260] : text); }
+    }
+}
+
 public static class Forensics
 {
     private sealed record Event(float Time, uint Channel, uint Actor, string Class, string Key, string Who, uint? Pawn, bool Searched,
@@ -27,6 +46,7 @@ public static class Forensics
         var showEvents = args.Contains("--events") || showTimelines;
         var movement = args.Contains("--movement");
         var onlyMine = args.Contains("--mine");
+        var hex = args.Contains("--hex");
         var from = Arg("--from") is { } fs0 ? float.Parse(fs0, System.Globalization.CultureInfo.InvariantCulture) : float.MinValue;
         var to = Arg("--to") is { } ts0 ? float.Parse(ts0, System.Globalization.CultureInfo.InvariantCulture) : float.MaxValue;
         var files = Directory.Exists(target)
@@ -43,8 +63,19 @@ public static class Forensics
                     Census = census, RpcCensus = rpcCensus, Spawns = Rx("--spawns"), Movement = movement, RpcCapture = Rx("--rpc"), Actors = Rx("--actors"),
                 },
             };
+            var log = args.Contains("--log-census") ? new CountingLogger() : null;
+            if (log is not null) reader.UseLogger(log);
             var r = reader.Read(file);
             var t = reader.LastTrace!;
+            if (log is not null)
+            {
+                Console.WriteLine("-- what the replay library could not read (message, count, first and last time, per-minute counts):");
+                foreach (var (k, v) in log.Seen.OrderByDescending(kv => kv.Value.Count))
+                {
+                    Console.WriteLine($"   {v.Count,7} × {k}   [{v.First:0}s .. {v.Last:0}s]  per minute: {string.Join(",", v.PerMinute.OrderBy(m => m.Key).Select(m => m.Key + ":" + m.Value))}");
+                    foreach (var e in v.Examples) Console.WriteLine("             e.g. " + e);
+                }
+            }
             var (mine, mates) = reader.Pawns();
             Console.WriteLine($"==================== {Path.GetFileName(file)}  {r.Status}  build {r.Branch}  {r.LengthMs / 1000}s  counted for recorder: {r.ChestsOpened}");
             Console.WriteLine($"recorder pawns: {string.Join(",", mine)}  teammate pawns: {string.Join(",", mates)}");
@@ -56,7 +87,7 @@ public static class Forensics
                 if (f.Note is not null) return $"{f.Name}{{{f.Note}}}";
                 if (f.Bits == 1) return $"{f.Name}={(f.Raw & 1)}";
                 if (f.Bits == 32 && f.Name.Contains("Magnitude", StringComparison.Ordinal)) return $"{f.Name}={BitConverter.Int32BitsToSingle((int)f.Raw):0.#}";
-                if (f.Bits > 64) return $"{f.Name}=<{f.Bits}b>";
+                if (f.Bits > 64) return hex && f.Data is not null ? $"{f.Name}=<{f.Bits}b:{Convert.ToHexString(f.Data)}>" : $"{f.Name}=<{f.Bits}b>";
                 if (f.Name is "SearchingPawn" or "PlayerState" or "Owner" or "Instigator" or "CurrentWeapon" or "HitActor" or "NonPlayerHitActor"
                     || (f.AsNetGuid() is uint g2 && (mine.Contains(g2) || mates.Contains(g2) || t.Paths.ContainsKey(g2))))
                 {
@@ -165,6 +196,16 @@ public static class Forensics
                 }
                 return best;
             }
+            // --where 110,798.5,...  : where the recording player was at those moments (needs --movement)
+            if (Arg("--where") is { } whereTimes)
+            {
+                foreach (var part in whereTimes.Split(',', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var time = float.Parse(part, System.Globalization.CultureInfo.InvariantCulture);
+                    var at = Near(mine, time);
+                    Console.WriteLine(at is { } p ? $"WHERE {time:0.0} {p.X:0} {p.Y:0} {p.Time:0.0}" : $"WHERE {time:0.0} none");
+                }
+            }
             string Distance(Event e)
             {
                 if (!movement || e.X is not double x || e.Y is not double y || Near(mine, e.Time) is not { } me) return "";
@@ -209,7 +250,12 @@ public static class Forensics
             if (t.Spawns.Count > 0)
             {
                 Console.WriteLine($"-- spawned actors matching --spawns ({t.Spawns.Count}):");
-                foreach (var s in t.Spawns.Take(600)) Console.WriteLine($"   {s.Time,7:F1}s  {Short(s.Archetype),-52} @{s.X:F0},{s.Y:F0},{s.Z:F0}");
+                foreach (var s in t.Spawns.Where(s => s.Time >= from && s.Time <= to).Take(20000))
+                {
+                    var me = movement ? Near(mine, s.Time) : null;
+                    var far = me is { } q ? $"  {Math.Sqrt((q.X - s.X) * (q.X - s.X) + (q.Y - s.Y) * (q.Y - s.Y)) / 100,6:F0} m" : "";
+                    Console.WriteLine($"   {s.Time,7:F1}s  {Short(s.Archetype),-52} @{s.X:F0},{s.Y:F0},{s.Z:F0}{far}");
+                }
             }
 
             if (Rx("--actors") is not null)
@@ -244,6 +290,16 @@ public static class Forensics
             {
                 Console.WriteLine("-- remote calls / custom fields by class:");
                 foreach (var (k, n) in t.RpcCensus.OrderByDescending(kv => kv.Value).Take(250)) Console.WriteLine($"   {n,6} × {Short(k[..k.LastIndexOf('.')])}.{k[(k.LastIndexOf('.') + 1)..]}");
+            }
+            if (args.Contains("--track"))
+            {
+                var last = float.MinValue;
+                foreach (var p in t.Positions.Where(p => mine.Contains(p.Actor)).OrderBy(p => p.Time))
+                {
+                    if (p.Time - last < 2f) continue;
+                    last = p.Time;
+                    Console.WriteLine($"TRACK {p.Time:0.0} #{p.Actor} {p.X:0} {p.Y:0}");
+                }
             }
             if (movement) Console.WriteLine($"-- positions recorded: {t.Positions.Count} (recorder: {t.Positions.Count(p => mine.Contains(p.Actor))})");
             Console.WriteLine();

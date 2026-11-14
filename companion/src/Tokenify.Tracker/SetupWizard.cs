@@ -237,6 +237,12 @@ internal sealed class SetupWizard : TkForm
 
     private void Next()
     {
+        // Enter in the code box means "link with this code", not "skip this step".
+        if (_step == 4 && !_snapshot.Paired && _code.Value.Trim().Length > 0 && _code.Box.Focused)
+        {
+            _ = Link();
+            return;
+        }
         if (_step < _steps.Count - 1)
         {
             Go(_step + 1);

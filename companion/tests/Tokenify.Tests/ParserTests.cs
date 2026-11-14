@@ -56,7 +56,7 @@ public static partial class Tests
             foreach (var e in CurrentExpectations.Load(currentExpected))
             {
                 var file = Path.Combine(current, e.File);
-                yield return ($"current {e.File}: {e.Chests} chests ({e.Searched} searched, {e.Destroyed} destroyed), {e.Ambiguous} ambiguous", () => CurrentMatches(file, e));
+                yield return ($"current {e.File}: {e.Chests} chest records ({e.Searched} searched, {e.Destroyed} destroyed), {e.Ambiguous} ambiguous; {e.Unrecorded} searches with no record, {e.Gaps} gaps", () => CurrentMatches(file, e));
             }
         }
 
@@ -91,6 +91,12 @@ public static partial class Tests
         public int Searched { get; set; }
         public int Destroyed { get; set; }
         public int Ambiguous { get; set; }
+        /// <summary>Counted searches of the player's own character that no chest record explains.</summary>
+        public int Unrecorded { get; set; }
+        /// <summary>Such searches that are only listed for review (held too long, another player's opening...).</summary>
+        public int UnrecordedReview { get; set; }
+        /// <summary>Stretches in which the replay holds next to nothing about the player's character.</summary>
+        public int Gaps { get; set; }
         public string? Note { get; set; }
 
         public static List<CurrentExpectations> Load(string path) => System.Text.Json.JsonSerializer.Deserialize<List<CurrentExpectations>>(
@@ -102,10 +108,17 @@ public static partial class Tests
         if (!File.Exists(file)) throw new SkipException("replay not present");
         var r = new ChestReader().Read(file);
         Eq(ScanStatus.Complete, r.Status, "status");
-        Eq(e.Chests, r.ChestsOpened, "chests");
-        Eq(e.Searched, r.Searched, "searched");
+        // Chest records (buried, relic, destroyed, Gum-Gum...): exactly what they were before the own-search rule.
+        static bool Rec(ChestEvent x) => x.Kind != EvidenceAnalyzer.UnrecordedKind;
+        Eq(e.Chests, r.Events.Count(x => x.Counted && Rec(x)), "chests with a chest record");
+        Eq(e.Searched, r.Events.Count(x => x.Counted && Rec(x) && x.Action == ChestAction.Searched), "searched");
         Eq(e.Destroyed, r.Destroyed, "destroyed");
-        Eq(e.Ambiguous, r.Ambiguous, "ambiguous (never counted)");
+        Eq(e.Ambiguous, r.Events.Count(x => x.Evidence == Evidence.Ambiguous && Rec(x)), "ambiguous chest records (never counted)");
+        // The player's own searches that no chest record explains.
+        Eq(e.Unrecorded, r.Events.Count(x => x.Counted && !Rec(x)), "own searches with no chest record (counted)");
+        Eq(e.UnrecordedReview, r.Events.Count(x => x.Evidence == Evidence.Ambiguous && !Rec(x)), "own searches listed for review (not counted)");
+        Eq(e.Gaps, r.Events.Count(x => x.Evidence == Evidence.Unobservable), "stretches with the character not recorded");
+        Eq(e.Chests + e.Unrecorded, r.ChestsOpened, "total");
         Eq(r.ChestsOpened, r.Events.Count(x => x.Counted), "counted events match the total");
         True(r.Events.Where(x => x.Counted).All(x => x.Evidence is Evidence.Confirmed or Evidence.Corroborated), "only confirmed or corroborated events are counted");
         True(r.Events.Where(x => x.Evidence == Evidence.Ambiguous).All(x => !x.Counted && x.Reason is not null), "ambiguous events carry a reason and are not counted");
@@ -419,10 +432,12 @@ public static partial class Tests
         if (!File.Exists(file)) throw new SkipException("missing " + Path.GetFileName(file));
         var r = new ChestReader().Read(file);
         Eq(ScanStatus.Complete, r.Status, "status (" + r.Error + ")");
-        Eq(e.Chests, r.ChestsOpened, "chests opened by the recording player");
+        var recorded = r.Chests.Where(c => c.Kind != EvidenceAnalyzer.UnrecordedKind).ToList();
+        Eq(e.Chests, recorded.Count, "chest records naming the recording player (what the three parsers agree on)");
+        Eq(e.Unrecorded, r.ChestsOpened - recorded.Count, "own searches with no chest record (counted)");
         if (e.RecorderPrefix != null) True(r.RecorderAccountId?.StartsWith(e.RecorderPrefix, StringComparison.OrdinalIgnoreCase) == true, "recorder id " + r.RecorderAccountId);
         if (e.SessionPrefix != null) True(r.MatchSessionId?.StartsWith(e.SessionPrefix, StringComparison.OrdinalIgnoreCase) == true, "match id " + r.MatchSessionId);
-        if (e.Times != null) Eq(string.Join(",", e.Times), string.Join(",", r.Chests.Select(c => ((int)c.Time).ToString())), "chest times (s)");
+        if (e.Times != null) Eq(string.Join(",", e.Times), string.Join(",", recorded.Select(c => ((int)c.Time).ToString())), "chest times (s)");
         if (e.Destroyed != null) Eq(e.Destroyed.Value, r.Chests.Count(c => c.Destroyed), "destroyed chests");
     }
 
@@ -550,6 +565,8 @@ internal static class FixtureExpectations
     {
         public string File { get; set; } = "";
         public int Chests { get; set; }
+        /// <summary>Counted searches of the recording player with no chest record (TOKENIFY only; the other parsers have no such rule).</summary>
+        public int Unrecorded { get; set; }
         public int? Destroyed { get; set; }
         public string? RecorderPrefix { get; set; }
         public string? SessionPrefix { get; set; }

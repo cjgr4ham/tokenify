@@ -383,8 +383,21 @@
       var xe = x.end || x.start;
       return x.start <= endMs && xe >= startMs;
     });
-    if (overlap.length === 1) {
-      var mg = overlap[0];
+    if (overlap.length >= 1) {
+      // Several hand-counted games inside one match (the game key was pressed mid-match): they are one match.
+      // The one with the most chests stands for it and takes the others' counts; the others are voided, so
+      // the replay is compared with the whole hand count and is never added on top of any of it.
+      var mg = overlap.slice().sort(function (a, b) { return (b.chests || 0) - (a.chests || 0); })[0];
+      overlap.forEach(function (x) {
+        if (x === mg) return;
+        mg.ts = (mg.ts || []).concat(x.ts || []).sort(function (a, b) { return a - b; });
+        mg.adj = (mg.adj || 0) + (x.adj || 0);
+        mg.chests = (mg.chests || 0) + (x.chests || 0);
+        mg.start = Math.min(mg.start, x.start);
+        x.ts = []; x.adj = 0; x.chests = 0; x.status = 'void'; x.mergedInto = mg.id;
+        if (!x.end) { x.end = endMs; x.endKind = 'replay'; }
+        if (st.currentGid === x.id) st.currentGid = null;
+      });
       mg.replay = replayMeta(m, { manual: { ts: (mg.ts || []).slice(), adj: mg.adj || 0, chests: mg.chests }, at: now,
         status: mode === 'hybrid' ? 'pending' : 'applied', times: replayTimes(m) });
       if (mode !== 'hybrid') {

@@ -8,7 +8,7 @@
   var U = TK.util, ui = TK.ui, h = U.h, api = TK.api;
   var DOWNLOAD = 'https://github.com/cjgr4ham/tokenify/releases/latest/download/TOKENIFY-Tracker.exe';
   var RELEASES = 'https://github.com/cjgr4ham/tokenify/releases/latest';
-  var KIND = { regular: 'regular', rare: 'rare', buried: 'buried', poster: 'sprite poster', relic: 'sprite vault', other: 'other' };
+  var KIND = { regular: 'regular', rare: 'rare', buried: 'buried', poster: 'sprite poster', relic: 'sprite vault', unrecorded: 'type not recorded', other: 'other' };
 
   var acc = null, st = null;           // tk_pc_tracking_state
   var server = {};                     // match id -> newest copy from the server

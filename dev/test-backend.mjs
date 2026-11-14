@@ -688,6 +688,11 @@ await section('mixed squad: one Switch player counting by hand + three PCs on re
   sq = (await dev(calPc, 'tk_device_hello')).squad;
   eq([sq.chests, sq.complete, sq.members, sq.reported], [163, true, 4, 4], "every member's tracker gets the final squad total");
   ok(Math.abs(Date.parse(sq.ended_at) - Date.now()) < 10 * MIN, 'with the time the squad game ended');
+  const season = (await dev(deePc, 'tk_device_hello')).squad_season;
+  eq([season.games, season.mates_chests], [1, 163 - 48], "the tracker's squad total: what the other three opened (38 + 42 + 35), never Dee's own 48");
+  await sql(`update tk_party_games set void = true where id = $1`, [gid]);
+  eq((await dev(deePc, 'tk_device_hello')).squad_season.mates_chests, 0, 'a voided squad game adds nothing');
+  await sql(`update tk_party_games set void = false where id = $1`, [gid]);
   ok((await sql(`select version from tk_party_signals where party_id = $1`, [g.party_id]))[0].version > sig, 'and pushes a live update');
   const hist = await call(sam, 'tk_party_history', {});
   eq([hist.stats.linked.games, hist.stats.linked.chests], [1, 163], 'linked squad stats use replay counts');

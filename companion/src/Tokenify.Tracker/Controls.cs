@@ -896,9 +896,11 @@ internal abstract class TkForm : Form
     {
         base.OnShown(e);
         // Opened on a display with another scale than the one it was built for.
-        if (!Theme.ScaleFixed && Math.Abs(DeviceDpi / 96f - _builtScale) > 0.01f)
+        // (compared within the range windows are built for, or a display beyond it would rebuild for ever)
+        var displayScale = Math.Clamp(DeviceDpi / 96f, 1f, 4f);
+        if (!Theme.ScaleFixed && Math.Abs(displayScale - _builtScale) > 0.01f)
         {
-            _pendingScale = DeviceDpi / 96f;
+            _pendingScale = displayScale;
             BeginInvoke(Rebuild);
         }
     }
@@ -921,7 +923,7 @@ internal abstract class TkForm : Form
         e.Cancel = true;   // no automatic rescaling: the window is built again instead
         base.OnDpiChanged(e);
         if (Theme.ScaleFixed) return;
-        _pendingScale = e.DeviceDpiNew / 96f;
+        _pendingScale = Math.Clamp(e.DeviceDpiNew / 96f, 1f, 4f);
         // While it is being dragged, wait until it is dropped.
         if (!_moving && IsHandleCreated) BeginInvoke(Rebuild);
     }

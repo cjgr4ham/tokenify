@@ -1,6 +1,6 @@
 {
-  "version": 2,
-  "updated": "2026-11-12",
+  "version": 3,
+  "updated": "2026-11-14",
   "notes": [
     "Which replicated Fortnite classes count as a TOKENIFY chest, and how openings are counted.",
     "A class is a chest candidate when its name contains 'chest' and it replicates the container fields",
@@ -14,11 +14,16 @@
     "'TackyGoofiness' is the game's internal name for the stretching fruit power (abilities: stretch launch,",
     "rocket, grab, falling kick), which players call the Gum-Gum Fruit. A weapon without a label is shown by its",
     "internal name rather than a guessed one.",
-    "v2 also stops 'hammock' matching the ammo rule and plain cannons matching the loot cannon rule."
+    "v2 also stops 'hammock' matching the ammo rule and plain cannons matching the loot cannon rule.",
+    "v3 (Fortnite 43.10): 'countUnrecordedSearches'. Many matches do not record ordinary chests at all. The",
+    "player's own character always carries a 'started searching' flag while it searches a container, so a search",
+    "with no chest record is counted once, as type 'unrecorded'. The flag does not say what was searched (an ammo",
+    "box looks the same). Set it to false to count chest records only, as before v3."
   ],
   "counting": {
     "countDestroyed": true,
     "countReopenedAfterRefill": true,
+    "countUnrecordedSearches": true,
     "staleWindowSeconds": 0.5,
     "sameSpawnToleranceCm": 150,
     "unknownChestPolicy": "count-and-flag"

@@ -65,6 +65,9 @@ public sealed class ChestReader : FortniteReplayBase
     private readonly List<(float Time, uint Pawn, uint Target, uint Weapon, float Magnitude, bool Fatal)> _hits = new();
     private readonly List<AbilityCue> _cues = new();
     private readonly List<ContainerRemoval> _removals = new();
+    private readonly List<(float Time, uint Pawn, bool On)> _searchFlags = new();
+    private readonly List<(float Time, uint Pawn)> _busDrops = new();
+    private readonly Dictionary<uint, (float First, float Last, int Updates)> _pawnSeen = new();
     private readonly NetBitReader _cue = new();
     private NetFieldExportGroup? _damageCueGroup;
     private float _damageCueLookupAt = float.MinValue;
@@ -145,8 +148,12 @@ public sealed class ChestReader : FortniteReplayBase
         {
             using var archive = new Unreal.Core.BinaryReader(data.AsMemory());
             ReadReplay(archive);
-            result.Status = IsPartialReplay ? ScanStatus.Partial : ScanStatus.Complete;
+            // Damaged blocks are skipped so the rest can still be read, but whatever they held is lost: the count
+            // is then a minimum, never a finished game.
+            var damaged = RejectedCorruptBlocks > 0;
+            result.Status = IsPartialReplay || damaged ? ScanStatus.Partial : ScanStatus.Complete;
             if (IsPartialReplay) result.Error = "the file ends in the middle of a data chunk";
+            else if (damaged) result.Error = $"{RejectedCorruptBlocks} damaged data block(s) were skipped, so chests may be missing";
         }
         catch (InvalidReplayException ex)
         {
@@ -211,6 +218,9 @@ public sealed class ChestReader : FortniteReplayBase
         _hits.Clear();
         _cues.Clear();
         _removals.Clear();
+        _searchFlags.Clear();
+        _busDrops.Clear();
+        _pawnSeen.Clear();
         _damageCueGroup = null;
         _damageCueLookupAt = float.MinValue;
         _resolvedClass.Clear();
@@ -299,6 +309,9 @@ public sealed class ChestReader : FortniteReplayBase
             Weapons = _weaponChanges.Where(w => myPawns.Contains(w.Pawn)).Select(w => new WeaponChange(w.Time, w.Pawn, ClassOfActor(w.Weapon))).ToList(),
             Cues = _cues.Where(c => myPawns.Contains(c.Pawn)).ToList(),
             MyPawns = myPawns,
+            Searches = OwnSearches(myPawns),
+            DroppedAt = _busDrops.Where(d => myPawns.Contains(d.Pawn)).Select(d => (float?)d.Time).Min(),
+            Lives = _pawnSeen.Where(p => myPawns.Contains(p.Key)).Select(p => new PawnLife(p.Key, p.Value.First, p.Value.Last, p.Value.Updates)).ToList(),
         };
         LastObservations = observations;
 
@@ -310,6 +323,29 @@ public sealed class ChestReader : FortniteReplayBase
         result.UnknownChestClasses = report.UnknownChestClasses.ToList();
         result.Chests = report.Events.Where(e => e.Counted)
             .Select(e => new ChestRecord(e.Time, e.Kind, e.ClassName, e.Action == ChestAction.Destroyed, e.Reopened, e.Unverified)).ToList();
+    }
+
+    /// <summary>The "started searching" flag of the player's own characters, as intervals (on ... off).</summary>
+    private List<OwnSearch> OwnSearches(HashSet<uint> myPawns)
+    {
+        var list = new List<OwnSearch>();
+        var open = new Dictionary<uint, float>();
+        foreach (var (time, pawn, on) in _searchFlags)
+        {
+            if (!myPawns.Contains(pawn)) continue;
+            if (on)
+            {
+                open.TryAdd(pawn, time); // the flag repeated while already on is the same search
+            }
+            else if (open.Remove(pawn, out var start))
+            {
+                list.Add(new OwnSearch(start, time, pawn));
+            }
+        }
+        // still on when that character's record ends (it died, or the replay stops): a search with no known end
+        foreach (var (pawn, start) in open) list.Add(new OwnSearch(start, null, pawn));
+        list.Sort((a, b) => a.Start.CompareTo(b.Start));
+        return list;
     }
 
     /// <summary>
@@ -558,7 +594,8 @@ public sealed class ChestReader : FortniteReplayBase
         var keepAll = kind == GroupKind.Container || byActor || Trace?.FieldFilter is null;
 
         uint? searchingPawn = null, playerState = null, recorderPlayerState = null, animCount = null, heldWeapon = null;
-        bool? searched = null, destroyed = null, instant = null;
+        bool? searched = null, destroyed = null, instant = null, searching = null;
+        var fromBus = false;
         var damageContext = false;
         string? sessionId = null, netId = null;
         int? team = null;
@@ -623,6 +660,12 @@ public sealed class ChestReader : FortniteReplayBase
                         case (GroupKind.Pawn, "CurrentWeapon"):
                             heldWeapon = PackedInt(raw, numBits);
                             break;
+                        case (GroupKind.Pawn, "bStartedInteractSearch"):
+                            searching = (raw & 1) != 0;
+                            break;
+                        case (GroupKind.Pawn, "bIsSkydivingFromBus"):
+                            fromBus = (raw & 1) != 0;
+                            break;
                         case (GroupKind.Container, "SearchAnimationCount") when numBits <= 32:
                             animCount = (uint)raw;
                             break;
@@ -670,6 +713,9 @@ public sealed class ChestReader : FortniteReplayBase
             case GroupKind.Pawn when channel.ActorId is uint pawn:
                 if (playerState is > 0) _pawnToPlayerState[pawn] = playerState.Value;
                 if (heldWeapon is uint held) _weaponChanges.Add((Now, pawn, held));
+                _pawnSeen[pawn] = _pawnSeen.TryGetValue(pawn, out var seen) ? (seen.First, Now, seen.Updates + 1) : (Now, Now, 1);
+                if (searching is bool on) _searchFlags.Add((Now, pawn, on));
+                if (fromBus) _busDrops.Add((Now, pawn));
                 break;
             case GroupKind.ReplayController when playerState is > 0:
                 _controllerPlayerState ??= playerState;

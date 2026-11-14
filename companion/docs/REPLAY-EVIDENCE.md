@@ -130,3 +130,43 @@ player's record, or from a replay that was not read to the end.
   nothing.
 - The Gum-Gum Fruit is identified by its internal name. If a later patch renames it, the label and the
   vanished-chest rule stop applying to it until the chest registry is updated; counting is unaffected.
+## Ordinary chests missing from the replay (Fortnite 43.00 and 43.10)
+
+Found on 2026-11-14 from a player's hand count, not from the tests.
+
+**Ground truth.** One match, counted by the player right after playing: 7 ordinary chests and 1 Sprite (relic)
+chest. Sample `season43-12`.
+
+**What the replay holds.** Two `B_TieredChest_Relics_C` channels (one searched by the recording player) and no
+`Tiered_Chest_Athena_C` / `AlwaysSpawn_NormalChest_C` channel at all. After the landing only about ten map-placed
+actors get a channel, none of them an ordinary chest. Eleven loot pickups spawn in the whole match after 0:40, none
+within 15 m of the player. The replay library reports two minor warnings for the whole file, so nothing was dropped
+while reading: the chests and their loot were never written.
+
+**Across 23 replays of the same player** the number of ordinary chest channels per match ranges from 0 to 234. Two
+matches hold many, most hold a handful or none, on both builds. What decides it is not known.
+
+**What is always there.** The player's own character (`PlayerPawn_Athena_C`) replicates `bStartedInteractSearch`:
+it turns on when a search starts and off when it is over, about 0.8 s later (measured 0.2 to 2.2 s), usually with
+`PawnMontage` set to the search animation. In the hand-counted match it fires 7 times; the last one is the relic
+chest, whose record follows 0.4 s later.
+
+**How the two relate.** In the 23 replays the flag fires 307 times. 106 of those are followed within 2.5 s by a chest
+record naming the player, almost all buried and relic chests: one search, one record. 201 are followed by nothing.
+Short and long holds are spread the same way in both groups, so hold time does not separate finished searches
+from abandoned ones. No flag fires twice for one record.
+
+**Rule (EvidenceAnalyzer.AddUnrecordedSearches).** Chest records are handled exactly as before. Then each search is
+matched to a record naming the player (seen live: within 0.3 s before to 3 s after; arrived with its chest: the
+latest unexplained search before it). A search left over is counted once, class *corroborated*, type
+`unrecorded`, signals `your-search` and `no-chest-record`. Not counted, only listed: searches before the bus drop
+(ignored), held over 3 s, never ending, or within 1.5 s of another player's recorded chest opening.
+
+**Limits.** The flag does not say what was searched. Other things that are searched (ammo boxes, coolers) fire it
+too. The public sample replays of older seasons show the same pattern (12 and 15 unrecorded searches where three
+parsers agree on 0 chest records), and nothing there says how many were chests.
+
+**After a reboot.** In 7 of the 23 replays the player's later characters get two or three updates in several
+minutes (a recorded character gets several per second), so neither the flag nor anything else can be seen.
+Chest records naming the player still arrive in some of those stretches and are counted as before. Each stretch is
+reported as "character not recorded" with its times; nothing is added for it.

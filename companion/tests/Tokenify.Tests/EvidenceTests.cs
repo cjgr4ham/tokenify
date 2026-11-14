@@ -46,6 +46,24 @@ public static partial class Tests
         yield return ("a vanished chest you hit is ambiguous", VanishAfterMyHit);
         yield return ("vanished ammo boxes are ignored", VanishOtherContainer);
 
+        // ---- the player's own searches (many matches hold no record of ordinary chests at all)
+        yield return ("a search with no chest record counts once, as 'unrecorded'", SearchNoRecord);
+        yield return ("a search and the chest record it produced are one chest", SearchWithRecord);
+        yield return ("ten buried chests with records plus 32 searches without: 42", SearchesMixed);
+        yield return ("a search on the warm-up island before the bus is not part of the match", SearchBeforeDrop);
+        yield return ("searches in a replay that never shows the bus drop are only listed", SearchNoDrop);
+        yield return ("a search held far longer than a chest takes is only listed", SearchLongHold);
+        yield return ("a search that never ends is only listed", SearchNoEnd);
+        yield return ("a chest record that arrives later explains one earlier search, not none and not two", SearchStaleRecord);
+        yield return ("another player's opening at the same moment: listed, not counted", SearchOtherPlayer);
+        yield return ("a chest you destroyed does not explain a search", SearchAndDestroy);
+        yield return ("a search whose record is an ammo box is not a chest", SearchAmmoRecord);
+        yield return ("a chest that opened in view with nobody named, while you searched: counted once", SearchUnnamedOpening);
+        yield return ("another player's searches are never yours", SearchByOthers);
+        yield return ("the rule can be switched off in the registry", SearchRuleOff);
+        yield return ("a life the replay did not record is reported, never counted", SilentLife);
+        yield return ("a record arriving after an unrecorded life does not eat an earlier search", StaleAfterSilentLife);
+
         // ---- reporting ----
         yield return ("events are in time order with searched/destroyed totals", TotalsAndOrder);
         yield return ("what you were holding is labelled from the registry", HoldingLabels);
@@ -64,7 +82,8 @@ public static partial class Tests
         new(t, ch, key, true, cls, pawn, null, true, 1, instant, context);
 
     private static EvidenceReport Analyze(OpeningResolver r, IEnumerable<ContainerRemoval>? removals = null, IEnumerable<ContainerHit>? hits = null,
-        IEnumerable<WeaponChange>? weapons = null, IEnumerable<AbilityCue>? cues = null, ChestRegistry? reg = null) =>
+        IEnumerable<WeaponChange>? weapons = null, IEnumerable<AbilityCue>? cues = null, ChestRegistry? reg = null,
+        IEnumerable<OwnSearch>? searches = null, float? dropped = 60f, IEnumerable<PawnLife>? lives = null) =>
         EvidenceAnalyzer.Analyze(new ReplayObservations
         {
             Openings = r.Openings,
@@ -73,7 +92,176 @@ public static partial class Tests
             Weapons = (weapons ?? []).ToList(),
             Cues = (cues ?? []).ToList(),
             MyPawns = MyPawns,
+            Searches = (searches ?? []).ToList(),
+            DroppedAt = dropped,
+            Lives = (lives ?? []).ToList(),
         }, reg ?? ChestRegistry.Default);
+
+    // ------------------------------------------------------------------ the player's own searches
+
+    /// <summary>A search by the recording player lasting the usual 0.8 s.</summary>
+    private static OwnSearch Srch(float start, float? length = 0.8f, uint pawn = Me) => new(start, length is float l ? start + l : null, pawn);
+
+    /// <summary>A chest in view (closed) that is opened at <paramref name="t"/> with <paramref name="pawn"/> named.</summary>
+    private static void SeenThenOpened(OpeningResolver r, uint ch, string key, float t, uint? pawn, string cls = ChestCls)
+    {
+        r.ChannelOpened(ch, 1f);
+        r.Observe(U(1f, ch, key, searched: false, cls: cls));
+        r.Observe(U(t, ch, key, pawn, searched: true, cls: cls));
+    }
+
+    private static void SearchNoRecord()
+    {
+        var report = Analyze(Resolver(), searches: [Srch(100f)]);
+        var e = report.Events.Single();
+        True(e.Counted, "counted");
+        Eq(Evidence.Corroborated, e.Evidence, "class");
+        Eq(EvidenceAnalyzer.UnrecordedKind, e.Kind, "kind");
+        Eq(ChestAction.Searched, e.Action, "action");
+        True(e.Signals.Contains(Signal.YourSearch) && e.Signals.Contains(Signal.NoChestRecord), "signals");
+        True(e.Reason is null, "no reason on a counted event");
+    }
+
+    private static void SearchWithRecord()
+    {
+        var r = Resolver();
+        SeenThenOpened(r, 1, "k", 101.9f, Me);   // the record arrives a second after the search ends
+        var report = Analyze(r, searches: [Srch(100f)]);
+        var e = report.Events.Single();
+        Eq(Evidence.Confirmed, e.Evidence, "the chest record stands, unchanged");
+        Eq("regular", e.Kind, "kind");
+        Eq(1, CountedTotal(report), "one chest");
+    }
+
+    private static void SearchesMixed()
+    {
+        var r = Resolver();
+        var searches = new List<OwnSearch>();
+        for (uint i = 0; i < 10; i++)
+        {
+            var t = 135f + i * 9;
+            searches.Add(Srch(t));
+            SeenThenOpened(r, i + 1, "buried" + i, t + 1.1f, Me, "/Game/Athena/BuriedChest/B_Athena_BuriedChest_Chest.B_Athena_BuriedChest_Chest_C");
+        }
+        for (var i = 0; i < 32; i++) searches.Add(Srch(246f + i * 20));
+        var report = Analyze(r, searches: searches);
+        Eq(42, CountedTotal(report), "total");
+        Eq(10, report.Events.Count(e => e.Evidence == Evidence.Confirmed), "ten chest records, as before");
+        Eq(32, report.Events.Count(e => e.Kind == EvidenceAnalyzer.UnrecordedKind && e.Counted), "32 searches with no record");
+        Eq(42, report.Events.Select(e => e.ChestId).Distinct().Count(), "each its own event");
+    }
+
+    private static void SearchBeforeDrop()
+    {
+        var report = Analyze(Resolver(), searches: [Srch(30f), Srch(100f)], dropped: 60f);
+        Eq(1, report.Events.Count, "only the one after the drop");
+        Eq(100.8f, report.Events[0].Time, "its time");
+    }
+
+    private static void SearchNoDrop()
+    {
+        var report = Analyze(Resolver(), searches: [Srch(100f)], dropped: null);
+        var e = report.Events.Single();
+        True(!e.Counted && e.Evidence == Evidence.Ambiguous && e.Reason is not null, "listed with a reason, not counted");
+    }
+
+    private static void SearchLongHold()
+    {
+        var report = Analyze(Resolver(), searches: [Srch(100f, 10f), Srch(200f, 2.2f)]);
+        Eq(1, CountedTotal(report), "the 2.2 s one counts (measured on real chests)");
+        var e = report.Events.Single(x => !x.Counted);
+        True(e.Evidence == Evidence.Ambiguous && e.Reason!.Contains("10"), "the 10 s one is listed with its length");
+    }
+
+    private static void SearchNoEnd()
+    {
+        var report = Analyze(Resolver(), searches: [Srch(100f, null)]);
+        True(report.Events.Single() is { Counted: false, Evidence: Evidence.Ambiguous }, "listed, not counted");
+    }
+
+    private static void SearchStaleRecord()
+    {
+        var r = Resolver();
+        r.ChannelOpened(1, 130f);
+        r.Observe(U(130f, 1, "late", Me, searched: true));   // the chest comes into the replay already opened by you
+        var report = Analyze(r, searches: [Srch(100f), Srch(110f)]);
+        Eq(2, CountedTotal(report), "two searches, one of them explained by the late record: two chests");
+        Eq(1, report.Events.Count(e => e.Evidence == Evidence.Confirmed), "the record");
+        Eq(1, report.Events.Count(e => e.Kind == EvidenceAnalyzer.UnrecordedKind), "one search left over");
+        Eq(100.8f, report.Events.Single(e => e.Kind == EvidenceAnalyzer.UnrecordedKind).Time, "the earlier one (the later one is the record's)");
+    }
+
+    private static void SearchOtherPlayer()
+    {
+        var r = Resolver();
+        SeenThenOpened(r, 1, "k", 101f, Enemy);
+        var report = Analyze(r, searches: [Srch(100f)]);
+        var e = report.Events.Single();
+        True(!e.Counted && e.Evidence == Evidence.Ambiguous && e.Reason!.Contains("another player"), "listed, not counted");
+    }
+
+    private static void SearchAndDestroy()
+    {
+        var r = Resolver();
+        SeenThenDestroyed(r, 1, "k", 101f, Me);
+        var report = Analyze(r, searches: [Srch(100f)]);
+        Eq(2, CountedTotal(report), "the destroyed chest and the searched one");
+        Eq(1, report.Events.Count(e => e.Action == ChestAction.Destroyed && e.Evidence == Evidence.Confirmed), "destroyed chest as before");
+    }
+
+    private static void SearchAmmoRecord()
+    {
+        var r = Resolver();
+        SeenThenOpened(r, 1, "ammo", 101f, Me, AmmoCls);
+        var report = Analyze(r, searches: [Srch(100f)]);
+        Eq(0, report.Events.Count, "no chest event");
+        Eq(1, report.OtherContainers.Values.Sum(), "tallied as another container");
+    }
+
+    private static void SearchUnnamedOpening()
+    {
+        var r = Resolver();
+        SeenThenOpened(r, 1, "k", 101f, null);
+        var alone = Analyze(r);
+        True(alone.Events.Single() is { Counted: false, Evidence: Evidence.Ambiguous }, "without a search: ambiguous, as before");
+        var report = Analyze(r, searches: [Srch(100f)]);
+        var e = report.Events.Single();
+        True(e.Counted && e.Evidence == Evidence.Corroborated, "with your search at that moment: counted once");
+        Eq("regular", e.Kind, "it keeps the chest's own type");
+        True(e.Signals.Contains(Signal.YourSearch) && e.Signals.Contains(Signal.NobodyNamed), "signals");
+    }
+
+    private static void SearchByOthers()
+    {
+        var report = Analyze(Resolver(), searches: [Srch(100f, pawn: Mate), Srch(120f, pawn: Enemy)]);
+        Eq(0, report.Events.Count, "nothing");
+    }
+
+    private static void SearchRuleOff()
+    {
+        var off = ChestRegistry.Parse("""{ "version": 99, "counting": { "countUnrecordedSearches": false } }""");
+        Eq(0, Analyze(Resolver(off), searches: [Srch(100f)], reg: off).Events.Count, "chest records only");
+        True(ChestRegistry.Default.CountUnrecordedSearches, "on in the built-in registry");
+    }
+
+    private static void SilentLife()
+    {
+        PawnLife[] lives = [new(Me, 62f, 300f, 2400), new(MyOtherPawn, 305f, 465f, 2), new(77, 5f, 40f, 3)];
+        var report = Analyze(Resolver(), lives: lives);
+        var e = report.Events.Single();
+        True(!e.Counted && e.Evidence == Evidence.Unobservable, "reported, not counted, not offered for adding");
+        True(e.Signals.Contains(Signal.CharacterNotRecorded) && e.Reason!.Contains("05:05") && e.Reason.Contains("07:45"), "with the times");
+        Eq(0, new ScanResult { Events = report.Events }.Ambiguous, "it is not an ambiguous chest");
+    }
+
+    private static void StaleAfterSilentLife()
+    {
+        var r = Resolver();
+        r.ChannelOpened(1, 470f);
+        r.Observe(U(470f, 1, "late", Me, searched: true));
+        var report = Analyze(r, searches: [Srch(100f)], lives: [new PawnLife(Me, 62f, 300f, 2400), new PawnLife(MyOtherPawn, 305f, 465f, 2)]);
+        Eq(2, CountedTotal(report), "the search before the gap and the chest opened during it");
+    }
 
     private static int CountedTotal(EvidenceReport report) => report.Events.Count(e => e.Counted);
 

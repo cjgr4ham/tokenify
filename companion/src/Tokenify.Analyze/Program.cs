@@ -126,7 +126,7 @@ public static class Program
 
         Console.WriteLine($"  Searched chests    {r.Searched}");
         Console.WriteLine($"  Destroyed chests   {r.Destroyed}");
-        Console.WriteLine($"  TOTAL CONFIRMED    {r.ChestsOpened}{(r.Corroborated > 0 ? $"   ({r.Confirmed} named by the game + {r.Corroborated} corroborated)" : "")}{(r.Status == ScanStatus.Partial ? "   (minimum: partial replay)" : "")}");
+        Console.WriteLine($"  TOTAL COUNTED      {r.ChestsOpened}{(r.Corroborated > 0 ? $"   ({r.Confirmed} named by the game on the chest + {r.Corroborated} from your own recorded action)" : "")}{(r.Status == ScanStatus.Partial ? "   (minimum: partial replay)" : "")}");
         Console.WriteLine($"  Ambiguous          {r.Ambiguous}{(r.Ambiguous > 0 ? "   not counted - for review" : "")}");
         Console.WriteLine($"  No record          {r.Unobservable}{(r.Unobservable > 0 ? "   chest spots that vanished with no record of who or why (not counted)" : "")}");
         if (r.ChestsByKind() is { Count: > 0 } kinds) Console.WriteLine($"  By type            {string.Join(", ", kinds.OrderByDescending(k => k.Value).Select(k => $"{k.Key} {k.Value}"))}");
@@ -140,9 +140,9 @@ public static class Program
             Console.WriteLine("  Events");
             foreach (var e in r.Events)
             {
-                var what = e.Action switch { ChestAction.Searched => "searched", ChestAction.Destroyed => "destroyed", _ => "vanished" };
+                var what = e.Signals.Contains(Signal.CharacterNotRecorded) ? "no data" : e.Action switch { ChestAction.Searched => "searched", ChestAction.Destroyed => "destroyed", _ => "vanished" };
                 var cls = e.Evidence switch { Evidence.Confirmed => "confirmed", Evidence.Corroborated => "corroborated", Evidence.Ambiguous => "AMBIGUOUS", _ => "no record" };
-                Console.WriteLine($"    {Clock(e.Time)}  {what,-9} {e.Kind,-8} {e.ClassName,-28} {cls,-12} {(e.Counted ? "counted" : "NOT counted"),-11} [{string.Join(", ", e.Signals)}]{(e.Holding is not null ? $"  holding {e.Holding}" : "")}{(e.Reopened ? "  (refilled, opened again)" : "")}{(e.Unverified ? "  (unverified class)" : "")}");
+                Console.WriteLine($"    {Clock(e.Time)}  {what,-9} {e.Kind,-10} {e.ClassName,-28} {cls,-12} {(e.Counted ? "counted" : "NOT counted"),-11} [{string.Join(", ", e.Signals)}]{(e.Holding is not null ? $"  holding {e.Holding}" : "")}{(e.Reopened ? "  (refilled, opened again)" : "")}{(e.Unverified ? "  (unverified class)" : "")}");
                 if (e.Reason is not null) Console.WriteLine($"           {e.Reason}");
             }
         }

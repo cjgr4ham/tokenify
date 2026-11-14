@@ -2024,6 +2024,26 @@ begin
     'ended_at', j -> 'ended_at');
 end $$;
 
+-- What a player's party members opened in squad games with them this season, for the Windows tracker's "Squad
+-- total" (the player's own total + this). Only chests that are really known: linked players' own counts and
+-- teammates entered as exact numbers. Never estimates, and never the player's own chests (already in their total).
+create or replace function tkp.squad_season(p_account uuid) returns jsonb
+language sql stable security definer set search_path = '' as $$
+  with games as (
+    select g.id from public.tk_party_games g
+      join public.tk_party_game_members mine on mine.game_id = g.id and mine.account_id = p_account
+     where g.status = 'ended' and not g.void and g.ended_at >= tkp.season_start()
+  )
+  select jsonb_build_object(
+    'games', (select count(*) from games),
+    'mates_chests',
+      coalesce((select sum(case when gm.replay_chests is not null then gm.replay_chests when gm.tracking = 'replay' then 0 else gm.chests end)
+                  from public.tk_party_game_members gm join games on games.id = gm.game_id
+                 where gm.account_id is distinct from p_account), 0)
+    + coalesce((select sum(t.exact_count) from public.tk_party_game_teammates t join games on games.id = t.game_id
+                 where t.mode = 'exact'), 0))
+$$;
+
 create or replace function public.tk_party_history(p_limit integer default 20) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare me uuid := tkp.require_account();
@@ -2097,6 +2117,7 @@ begin
                    from public.tk_replay_profiles p where p.account_id = d.account_id),
     'season_start', tkp.season_start(),
     'squad', tkp.squad_last(d.account_id),
+    'squad_season', tkp.squad_season(d.account_id),
     'server_time', now());
 end $$;
 

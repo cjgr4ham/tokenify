@@ -159,9 +159,15 @@ public static class Exporter
     public static string Rule(ChestEvent e) => e.Evidence switch
     {
         Evidence.Confirmed => "The chest's own record shows it " + (e.Action == ChestAction.Destroyed ? "being destroyed" : "being opened") + " and names you.",
+        Evidence.Corroborated when e.Signals.Contains(Signal.NoChestRecord) =>
+            "Your own character is recorded searching a container here, and the replay holds no chest record for it. "
+            + "Counted once. The replay does not say what kind of container it was.",
+        Evidence.Corroborated when e.Signals.Contains(Signal.YourSearch) =>
+            "The chest's record names nobody, but your own character is recorded searching at the moment it opened.",
         Evidence.Corroborated => "The chest's record names nobody, but your own hit on this chest is recorded just before it "
             + (e.Action == ChestAction.Destroyed ? "broke" : "opened") + ", and nobody else's is.",
         Evidence.Ambiguous => e.Reason ?? "The replay does not say who did this.",
+        _ when e.Signals.Contains(Signal.CharacterNotRecorded) => e.Reason ?? "The replay holds almost nothing about your character for this stretch.",
         _ => "The replay holds no record for this chest.",
     };
 
@@ -181,6 +187,9 @@ public static class Exporter
         Signal.AbilityActive => "you were attacking with an area weapon or power",
         Signal.NoDetail => "the replay only shows it is gone",
         Signal.SeenIntact => "it had been seen closed earlier",
+        Signal.CharacterNotRecorded => "the replay holds almost nothing about your character for this stretch",
+        Signal.YourSearch => "your own character is recorded searching",
+        Signal.NoChestRecord => "the replay has no chest record for it (type not recorded)",
         _ => signal,
     };
 

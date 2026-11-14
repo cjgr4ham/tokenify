@@ -30,6 +30,8 @@ public sealed class ChestRegistry
     public int Version { get; private init; }
     public bool CountDestroyed { get; private init; } = true;
     public bool CountReopenedAfterRefill { get; private init; } = true;
+    /// <summary>Count the player's own search actions that no chest record explains (see EvidenceAnalyzer).</summary>
+    public bool CountUnrecordedSearches { get; private init; } = true;
     public float StaleWindowSeconds { get; private init; } = 0.5f;
     public double SameSpawnToleranceCm { get; private init; } = 150;
     /// <summary>"count-and-flag" (counted, listed as unverified) or "ignore" (not counted, still reported).</summary>
@@ -68,6 +70,7 @@ public sealed class ChestRegistry
             Version = doc.Version,
             CountDestroyed = doc.Counting?.CountDestroyed ?? true,
             CountReopenedAfterRefill = doc.Counting?.CountReopenedAfterRefill ?? true,
+            CountUnrecordedSearches = doc.Counting?.CountUnrecordedSearches ?? true,
             StaleWindowSeconds = doc.Counting?.StaleWindowSeconds ?? 0.5f,
             SameSpawnToleranceCm = doc.Counting?.SameSpawnToleranceCm ?? 150,
             UnknownChestPolicy = doc.Counting?.UnknownChestPolicy ?? "count-and-flag",
@@ -172,6 +175,7 @@ public sealed class ChestRegistry
     {
         public bool? CountDestroyed { get; set; }
         public bool? CountReopenedAfterRefill { get; set; }
+        public bool? CountUnrecordedSearches { get; set; }
         public float? StaleWindowSeconds { get; set; }
         public double? SameSpawnToleranceCm { get; set; }
         public string? UnknownChestPolicy { get; set; }

@@ -103,9 +103,31 @@ based on:
 | Class | Meaning | Counted |
 |---|---|---|
 | **Confirmed** | the game named you on the chest and recorded its new state | yes |
-| **Corroborated** | nobody was named, but the chest was seen intact, your own hit on it is recorded within seconds, and nobody else's | yes |
+| **Corroborated** | no chest record names you, but a record of your own action does: your hit on that chest right before it opened (and nobody else's), or your own character searching with no chest record at all for that moment (type "not recorded") | yes |
 | **Ambiguous** | something happened to the chest while you were attacking, but the replay does not say who did it | **no**, unless you add it |
 | **No record** | the chest left the replay with no information at all | no (only the number is noted) |
+
+## Ordinary chests the replay does not record
+
+Fortnite often leaves ordinary chests out of the replay completely: no chest, no opened state, no loot. Buried and
+Sprite chests are recorded. Version 2.0 only counted chest records, so matches full of ordinary chests came out far
+too low (a hand-counted match with 7 ordinary chests and 1 Sprite chest counted 1).
+
+Since 2.1 the tracker also reads your own character, which carries a "started searching" flag while you search.
+A search with a chest record right after it is that chest, counted once from the record as before. A search with
+no chest record is counted once as type **not recorded**. The same hand-counted match now counts 7 of the 8.
+
+What this cannot do:
+
+- It cannot tell what you searched. An ammo box or a cooler looks the same as a chest (when the replay does record
+  the ammo box, it is left out as before).
+- It cannot tell a search you let go of early from a finished one.
+- After a reboot some replays hold almost nothing about your new character. Those stretches are listed under the
+  match with their times and the count is a minimum.
+- Searches on the warm-up island are ignored. A search held over 3 seconds, one that never ends, or one at the
+  same moment as another player's recorded opening is listed for review and not counted.
+
+To count chest records only, as 2.0 did, set `"countUnrecordedSearches": false` in `registry/chest-registry.json`.
 
 ## When the replay is not sure (ambiguous chests)
 

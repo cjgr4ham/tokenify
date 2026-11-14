@@ -6,8 +6,10 @@ public enum Evidence
     /// <summary>The game itself named the recording player on the chest at the moment it opened or broke. Counted.</summary>
     Confirmed,
     /// <summary>
-    /// The game named nobody, but two separate records agree: the chest opened or broke in view, and the player's
-    /// own hit on that very chest is recorded just before (and nobody else's). Counted, flagged for review.
+    /// No chest record names the player, but a record of the player's own action does the job instead. Either the
+    /// chest opened or broke in view and the player's own hit on that very chest is recorded just before (and
+    /// nobody else's), or the player's own character is recorded searching a container and the replay holds no
+    /// chest record for that moment at all (many matches do not record ordinary chests). Counted, flagged for review.
     /// </summary>
     Corroborated,
     /// <summary>Something happened to a chest during the player's activity, but the replay does not say who did it.
@@ -55,6 +57,12 @@ public static class Signal
     public const string NoDetail = "no-detail";
     /// <summary>The chest had been seen intact (closed) earlier in this replay.</summary>
     public const string SeenIntact = "seen-intact";
+    /// <summary>The recording player's own character is recorded searching a container at that moment.</summary>
+    public const string YourSearch = "your-search";
+    /// <summary>The replay holds no chest record for that search: what was searched is not recorded.</summary>
+    public const string NoChestRecord = "no-chest-record";
+    /// <summary>For a stretch of the match the replay holds next to nothing about the player's own character.</summary>
+    public const string CharacterNotRecorded = "character-not-recorded";
 }
 
 /// <summary>One chest interaction found in a replay, with the evidence for it.</summary>
@@ -95,6 +103,16 @@ public readonly record struct WeaponChange(float Time, uint Pawn, string? Weapon
 /// <summary>An ability/effect cue fired on a character (used only as "was attacking at that moment").</summary>
 public readonly record struct AbilityCue(float Time, uint Pawn);
 
+/// <summary>
+/// One search action of a character: the game sets a flag on the character itself while it searches a container
+/// (chest, ammo box...) and clears it when the search is over. It does not say what was searched.
+/// </summary>
+/// <param name="End">When the flag was cleared; null when the replay never shows that.</param>
+public readonly record struct OwnSearch(float Start, float? End, uint Pawn);
+
+/// <summary>How much the replay holds about one character: its first and last update and how many there were.</summary>
+public readonly record struct PawnLife(uint Pawn, float First, float Last, int Updates);
+
 /// <summary>Everything the reader collected that bears on chest interactions.</summary>
 public sealed class ReplayObservations
 {
@@ -105,6 +123,12 @@ public sealed class ReplayObservations
     public IReadOnlyList<AbilityCue> Cues { get; init; } = [];
     /// <summary>Every character the recording player controlled in this match (one per life).</summary>
     public IReadOnlySet<uint> MyPawns { get; init; } = new HashSet<uint>();
+    /// <summary>Search actions of the recording player's own characters.</summary>
+    public IReadOnlyList<OwnSearch> Searches { get; init; } = [];
+    /// <summary>When the recording player jumped from the bus (the match proper begins); null when never seen.</summary>
+    public float? DroppedAt { get; init; }
+    /// <summary>One entry per character the recording player controlled.</summary>
+    public IReadOnlyList<PawnLife> Lives { get; init; } = [];
 }
 
 public sealed class EvidenceReport
@@ -140,6 +164,20 @@ public static class EvidenceAnalyzer
     public const int AbilityCuesNeeded = 3;
     /// <summary>A named record this soon after an unnamed one for the same chest replaces it.</summary>
     public const float SupersedeSeconds = 10f;
+    /// <summary>A chest's record may arrive this long after the search that opened it ended (measured: up to 2.5 s).</summary>
+    public const float SearchRecordLagSeconds = 3f;
+    /// <summary>...and, because the two travel separately, this much before the search is seen starting.</summary>
+    public const float SearchLeadSeconds = 0.3f;
+    /// <summary>Searching a chest takes about 0.8 s (measured 0.2 - 2.2 s). Anything held longer is something else.</summary>
+    public const float MaxSearchSeconds = 3f;
+    /// <summary>Another player's chest opening this close to the end of a search may be the same chest.</summary>
+    public const float SearchRaceSeconds = 1.5f;
+    /// <summary>Kind of a counted search whose container the replay does not record.</summary>
+    public const string UnrecordedKind = "unrecorded";
+    /// <summary>A life this long with at most <see cref="SilentLifeUpdates"/> updates was not recorded
+    /// (a recorded character gets several updates every second).</summary>
+    public const float SilentLifeSeconds = 30f;
+    public const int SilentLifeUpdates = 10;
 
     public static EvidenceReport Analyze(ReplayObservations obs, ChestRegistry registry)
     {
@@ -284,7 +322,136 @@ public static class EvidenceAnalyzer
                 signals.ToArray(), registry.WeaponLabel(held), why, Unverified: cls.Role == ContainerRole.UnknownChest));
         }
 
+        AddUnrecordedSearches(report, obs, registry, HeldClass);
+        AddSilentLives(report, obs);
+
         report.Events.Sort((a, b) => a.Time.CompareTo(b.Time));
         return report;
+    }
+
+    /// <summary>
+    /// The player's own search actions that no chest record explains.
+    ///
+    /// Why this exists: in many Fortnite 43 matches ordinary chests are not written to the replay at all - no
+    /// chest, no opened state, no loot - while buried and relic chests are. A hand-counted match (seven ordinary
+    /// chests, one relic chest) held exactly one chest record. What the replay does always hold is the player's own
+    /// character: it carries a "started searching" flag for as long as a search lasts. In the same replays every
+    /// buried and relic chest opening has such a search right before its record (measured on 106 openings), so the
+    /// two are the same act seen twice, and a search without a record is an opening the replay did not describe.
+    ///
+    /// Rules, in this order, so that nothing is counted twice and none of the chest-record rules above change:
+    /// 1. A chest record naming the player, seen as it happened, explains the search that ended just before it.
+    /// 2. A record naming the player that arrived together with its chest explains the latest unexplained search
+    ///    before it (the search was earlier; the chest only came into the replay afterwards).
+    /// 3. A chest that opened in view with nobody named, at the moment of a search, is that search's chest.
+    /// 4. Every search left over is counted once as "unrecorded" - unless it happened before the bus drop, was held
+    ///    longer than a search takes, never ended, or coincides with another player's recorded opening; those are
+    ///    listed as ambiguous and never counted automatically.
+    /// The flag does not say what was searched: an ammo box or a cooler looks the same. That is stated wherever the
+    /// number is shown.
+    /// </summary>
+    /// <summary>
+    /// After a reboot some replays hold next to nothing about the player's new character: two or three updates in
+    /// several minutes, so no searches and no chest records can be seen. That is reported, with the times, as a
+    /// stretch with no record. Nothing is counted for it and nothing is guessed.
+    /// </summary>
+    private static bool IsSilent(PawnLife life, float? droppedAt) =>
+        droppedAt is float dropped && life.First >= dropped && life.Last - life.First >= SilentLifeSeconds && life.Updates <= SilentLifeUpdates;
+
+    private static void AddSilentLives(EvidenceReport report, ReplayObservations obs)
+    {
+        foreach (var life in obs.Lives.Where(l => obs.MyPawns.Contains(l.Pawn)).OrderBy(l => l.First))
+        {
+            if (!IsSilent(life, obs.DroppedAt)) continue;
+            static string Clock(float s) => $"{(int)s / 60:00}:{(int)s % 60:00}";
+            report.Events.Add(new ChestEvent(life.First, UnrecordedKind, "Character not recorded", FormattableString.Invariant($"gap@{life.First:0}"),
+                ChestAction.Removed, Evidence.Unobservable, Counted: false, [Signal.CharacterNotRecorded], null,
+                $"From {Clock(life.First)} to {Clock(life.Last)} the replay holds almost nothing about your character (this happens after a reboot). "
+                + "Chests you opened in that time cannot be seen, so this match's count is a minimum."));
+        }
+    }
+
+    private static void AddUnrecordedSearches(EvidenceReport report, ReplayObservations obs, ChestRegistry registry, Func<float, string?> heldClass)
+    {
+        if (!registry.CountUnrecordedSearches) return;
+        var mine = obs.MyPawns;
+        var searches = obs.Searches.Where(s => mine.Contains(s.Pawn)).OrderBy(s => s.Start).ToList();
+        if (searches.Count == 0) return;
+
+        var explained = new bool[searches.Count];
+        int Latest(Func<OwnSearch, bool> fits)
+        {
+            for (var i = searches.Count - 1; i >= 0; i--)
+            {
+                if (!explained[i] && fits(searches[i])) return i;
+            }
+            return -1;
+        }
+        bool Around(OwnSearch s, float t) => s.Start <= t + SearchLeadSeconds && t <= (s.End ?? s.Start) + SearchRecordLagSeconds;
+
+        // 1 and 2: records that name the player. A destroyed chest was broken, not searched: it explains no search.
+        var named = obs.Openings
+            .Where(o => o.Opener is uint p && mine.Contains(p) && !o.Destroyed && registry.Classify(o.ClassPath).Role != ContainerRole.None)
+            .OrderBy(o => o.Time).ToList();
+        foreach (var o in named.Where(o => !o.Stale))
+        {
+            if (Latest(s => Around(s, o.Time)) is >= 0 and var i) explained[i] = true;
+        }
+        // ...unless a stretch with no character data lies in between: then the chest was opened in that stretch,
+        // where no search could be seen, and it explains none of the searches before it.
+        var silent = obs.Lives.Where(l => mine.Contains(l.Pawn) && IsSilent(l, obs.DroppedAt)).ToList();
+        foreach (var o in named.Where(o => o.Stale && o.StableKey))
+        {
+            if (Latest(s => s.Start <= o.Time && !silent.Any(g => g.First >= s.Start && g.First <= o.Time)) is >= 0 and var i) explained[i] = true;
+        }
+
+        // 3: a chest that opened in view with nobody named. Already counted (your hit on record): nothing to add.
+        // Listed as ambiguous: the player's own search at that moment is the second record it was missing.
+        for (var n = 0; n < report.Events.Count; n++)
+        {
+            var e = report.Events[n];
+            if (e.Action != ChestAction.Searched || !e.Signals.Contains(Signal.NobodyNamed)) continue;
+            if (Latest(s => Around(s, e.Time)) is not (>= 0 and var i)) continue;
+            explained[i] = true;
+            if (!e.Counted)
+            {
+                report.Events[n] = e with { Evidence = Evidence.Corroborated, Counted = true, Reason = null, Signals = [.. e.Signals.Where(x => x != Signal.YourHit), Signal.YourSearch] };
+            }
+        }
+
+        // 4: what is left.
+        var othersOpened = obs.Openings
+            .Where(o => o.Opener is uint p && p != 0 && !mine.Contains(p) && !o.Stale && !o.Destroyed && registry.Counts(registry.Classify(o.ClassPath)))
+            .Select(o => o.Time).ToList();
+        for (var i = 0; i < searches.Count; i++)
+        {
+            if (explained[i]) continue;
+            var s = searches[i];
+            // The warm-up island before the bus is not part of the match.
+            if (obs.DroppedAt is float dropped && s.Start < dropped) continue;
+
+            string? why = null;
+            if (obs.DroppedAt is null)
+            {
+                why = "You searched something, but the replay never shows you leaving the bus, so it cannot be placed in the match.";
+            }
+            else if (s.End is not float end)
+            {
+                why = "You started searching something, but the replay does not show the search ending.";
+            }
+            else if (end - s.Start > MaxSearchSeconds)
+            {
+                why = $"You held a search for {end - s.Start:0.#} seconds, longer than a chest takes. The replay does not record what it was.";
+            }
+            else if (othersOpened.Any(t => t >= end - 0.5f && t <= end + SearchRaceSeconds))
+            {
+                why = "You searched something, and at the same moment the replay records another player opening a chest and none for you. It may have been the same chest.";
+            }
+
+            var time = s.End ?? s.Start;
+            report.Events.Add(new ChestEvent(time, UnrecordedKind, "Search (chest not in replay)", FormattableString.Invariant($"search@{s.Start:0.0}"),
+                ChestAction.Searched, why is null ? Evidence.Corroborated : Evidence.Ambiguous, Counted: why is null,
+                [Signal.YourSearch, Signal.NoChestRecord], registry.WeaponLabel(heldClass(time)), why));
+        }
     }
 }
