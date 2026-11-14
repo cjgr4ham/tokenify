@@ -1,0 +1,20 @@
+[
+  { "file": "season43-01.replay", "chests": 2, "searched": 1, "destroyed": 1, "ambiguous": 4,
+    "note": "Fortnite 43.00. One relic chest destroyed with the Gum-Gum Fruit (named by the game). Four chests on a ship vanish at 07:27 with no record while the player attacks with the Gum-Gum Fruit: ambiguous, not counted. NOT hand-counted: baseline is the agreement of TOKENIFY, rossalv and LED-N on the counted total." },
+  { "file": "season43-02.replay", "chests": 3, "searched": 2, "destroyed": 1, "ambiguous": 0,
+    "note": "One chest destroyed instantly (structure) and named by the game. Baseline, not hand-counted." },
+  { "file": "season43-03.replay", "chests": 11, "searched": 10, "destroyed": 1, "ambiguous": 0,
+    "note": "Nine buried chests, one relic, and one chest destroyed with the Gum-Gum Fruit whose state arrived together with the chest (it was not replicated before). Baseline, not hand-counted." },
+  { "file": "season43-04.replay", "chests": 0, "searched": 0, "destroyed": 0, "ambiguous": 0,
+    "note": "Gum-Gum Fruit held for about five minutes with no chest interaction. Baseline, not hand-counted." },
+  { "file": "season43-05.replay", "chests": 28, "searched": 28, "destroyed": 0, "ambiguous": 0,
+    "note": "26 buried and 2 relic chests; the same chests come back into view 31 times and are not counted again. Baseline, not hand-counted." },
+  { "file": "season43-06.replay", "chests": 1, "searched": 1, "destroyed": 0, "ambiguous": 0, "note": "Baseline, not hand-counted." },
+  { "file": "season43-07.replay", "chests": 1, "searched": 1, "destroyed": 0, "ambiguous": 0,
+    "note": "Two already-opened buried chests are destroyed later with nobody named: not events. Baseline, not hand-counted." },
+  { "file": "season43-08.replay", "chests": 0, "searched": 0, "destroyed": 0, "ambiguous": 0, "note": "Baseline, not hand-counted." },
+  { "file": "season43-09.replay", "chests": 0, "searched": 0, "destroyed": 0, "ambiguous": 0, "note": "Baseline, not hand-counted." },
+  { "file": "season43-10.replay", "chests": 2, "searched": 2, "destroyed": 0, "ambiguous": 0,
+    "note": "Squad match: teammates open 18 chests and other players 8; none are attributed to the recorder. Baseline, not hand-counted." },
+  { "file": "season43-11.replay", "chests": 0, "searched": 0, "destroyed": 0, "ambiguous": 0, "note": "Baseline, not hand-counted." }
+]

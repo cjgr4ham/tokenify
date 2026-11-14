@@ -38,15 +38,34 @@
     if (s && s.v === 1) { model.state = s; model.recount(); var cur = model.session(); if (cur && cur.status === 'active' && isOwner && model.lastPerf == null) model.markRunning(); }
   }
 
+  // On automatic PC tracking nobody starts a session by hand: matches arrive from the PC and are grouped into
+  // sessions by themselves. With no session running, the counter then shows the newest of those, so the big
+  // number is the chests of the player's latest play session rather than a bare 0.
+  function autoView() {
+    var pc = TK.pc && TK.pc.state ? TK.pc.state() : null;
+    if (!pc || pc.tracking !== 'auto' || model.session()) return null;
+    var s = model.state, best = null, lastGame = {};
+    s.gameOrder.forEach(function (gid) { var g = s.games[gid]; if (g && g.status !== 'void') lastGame[g.sid] = g; });
+    s.sessionOrder.forEach(function (id) {
+      var x = s.sessions[id];
+      // back-filled history is not "latest"; neither is a session started by hand and ended without a game
+      if (!x || x.historical || !lastGame[id]) return;
+      if (!best || (x.end || x.start) >= (best.end || best.start)) best = x;
+    });
+    return { session: best, game: best ? lastGame[best.id] : null };
+  }
+
   // ---------------- main render ----------------
   function render() {
     if (!model || !els.count) return; // not wired up yet
     var st = model.status(), sess = model.session(), game = model.game();
+    var auto = isOwner ? autoView() : null;
     els.status.setAttribute('data-state', !isOwner ? 'elsewhere' : st);
-    U.setText(els.statusText, !isOwner ? 'Open in another tab' : st === 'active' ? 'Session active' : st === 'paused' ? 'Paused' : 'No session — ready');
-    U.setText(els.sessionNo, sess ? 'Session ' + model.sessionNo(sess.id) : '');
-    var count = model.sessionChests();
+    U.setText(els.statusText, !isOwner ? 'Open in another tab' : auto ? 'Automatic — counted after each match' : st === 'active' ? 'Session active' : st === 'paused' ? 'Paused' : 'No session — ready');
+    U.setText(els.sessionNo, sess ? 'Session ' + model.sessionNo(sess.id) : auto && auto.session ? 'Session ' + model.sessionNo(auto.session.id) : '');
+    var count = auto && auto.session ? auto.session.chests : model.sessionChests();
     digits(els.count, count);
+    if (els.countLabel) U.setText(els.countLabel, auto && auto.session ? 'Chests in your latest session · ' + U.fmtDate(auto.session.end || auto.session.start) : 'Chests this session');
     if (lastCount != null && count !== lastCount && opt('trkAnim') && !U.reducedMotion()) {
       els.count.classList.remove('bump', 'dip'); void els.count.offsetWidth; els.count.classList.add(count > lastCount ? 'bump' : 'dip');
     }
@@ -54,9 +73,11 @@
     var blockedPlus = !isOwner || (st === 'paused' && !opt('trkAutoResumeCount'));
     els.plus.disabled = blockedPlus; els.minus.disabled = !isOwner || count <= 0;
     els.view.classList.toggle('is-paused', st === 'paused'); els.view.classList.toggle('is-elsewhere', !isOwner);
-    els.hint.innerHTML = !isOwner ? 'Counting is paused in this tab to prevent double counting.' : st === 'paused' ? 'Paused — resume to keep counting' + (opt('trkAutoResumeCount') ? ' (or press <kbd>Space</kbd> to resume and count)' : '') : 'Press <kbd>Space</kbd> for every chest' + (opt('trkNKey') ? ' · <kbd>N</kbd> ends the game' : '');
+    els.hint.innerHTML = !isOwner ? 'Counting is paused in this tab to prevent double counting.' : st === 'paused' ? 'Paused — resume to keep counting' + (opt('trkAutoResumeCount') ? ' (or press <kbd>Space</kbd> to resume and count)' : '') : auto ? 'Your PC counts for you: each match is added a few seconds after it ends. Nothing to press.'
+      : 'Press <kbd>Space</kbd> for every chest' + (opt('trkNKey') ? ' · <kbd>N</kbd> ends the game' : '');
     // game + CPG
     if (game) { U.setText(els.game, U.fmtInt(game.chests)); U.setText(els.gameL, 'Current game ' + model.gameNo(game.id)); }
+    else if (auto && auto.game) { U.setText(els.game, U.fmtInt(auto.game.chests)); U.setText(els.gameL, 'Last game'); }
     else { U.setText(els.game, '—'); U.setText(els.gameL, sess ? 'Next chest starts game ' + (model.state.gameOrder.length + 1) : 'Current game'); }
     var all = model.cpgAll(), rec = model.cpgRecent(10);
     U.setText(els.cpgAll, all ? U.fmtNum(all.cpg, 1) : '—');
@@ -87,10 +108,12 @@
     if (els.details.open) renderDetails();
   }
   function renderTime() {
-    var ms = 0;
-    if (isOwner) ms = model.activeMs();
+    var ms = 0, auto = isOwner ? autoView() : null;
+    if (auto && auto.session) ms = model.activeMs(auto.session.id);   // an automatic session's time is its matches' own length
+    else if (isOwner) ms = model.activeMs();
     else { var live = U.storage.get('tracker.live', null), s = model.session(); ms = s ? s.activeMs : 0; if (live && s && live.sid === s.id) ms = live.activeMs + (s.status === 'active' ? Math.max(0, Date.now() - live.wall) : 0); }
     U.setText(els.time, U.fmtClock(ms));
+    if (els.timeL) U.setText(els.timeL, auto && auto.session && auto.session.inferred ? 'Time in matches' : 'Session time');
   }
   function renderEta() {
     var tok = model.tokenRecord();
@@ -588,12 +611,13 @@
       model.load(isOwner ? { autoResume: opt('trkAutoResumeOpen'), keepRunning: opt('trkKeepRunning') } : {});
       TK.tracker = model;
       model.compact(400);
-      var ids = { view: 'trk', status: 'trk-status', statusText: 'trk-status-text', sessionNo: 'trk-session-no', saved: 'trk-saved', banner: 'trk-banner', count: 'trk-count', plus: 'trk-plus', minus: 'trk-minus', hint: 'trk-hint',
+      var ids = { view: 'trk', status: 'trk-status', statusText: 'trk-status-text', sessionNo: 'trk-session-no', saved: 'trk-saved', banner: 'trk-banner', count: 'trk-count', countLabel: 'trk-count-label', plus: 'trk-plus', minus: 'trk-minus', hint: 'trk-hint',
         game: 'trk-game', gameL: 'trk-game-l', cpgAll: 'trk-cpg-all', cpgRecent: 'trk-cpg-recent', cpgRecentL: 'trk-cpg-recent-l', cpgDelta: 'trk-cpg-delta', time: 'trk-time', total: 'trk-total',
         pSession: 'trk-p-session', pOverall: 'trk-p-overall', eta: 'trk-eta', etaS: 'trk-eta-s', endGame: 'trk-endgame', start: 'trk-start', pause: 'trk-pause', end: 'trk-end', details: 'trk-details', settingsBtn: 'trk-settings-btn',
         recon: 'trk-recon' };
       Object.keys(ids).forEach(function (k) { els[k] = document.getElementById(ids[k]); });
       els.etaWrap = els.eta.parentElement;
+      els.timeL = els.time.nextElementSibling;   // the label under the clock
       ui.tips.cumulative = 'Your cumulative chance of at least one Pirate Token over this many chests. Each individual chest is always exactly 1 in 137,500 — the next chest never becomes more likely.';
       ui.tips.eta = 'Average extra active time to get a token at your measured pace: 137,500 more chests ÷ your chests per hour. Past chests never shorten it, and it is an estimate, not a guarantee.';
       els.plus.addEventListener('click', plus); els.minus.addEventListener('click', minus);
@@ -607,6 +631,7 @@
       });
       model.on(function (what) { render(); if (what !== 'restore') saved(); if (TK.sync) TK.sync.notifyChange(); });
       U.bus.on('settings', function (e) { if (e && String(e.key).indexOf('trk') === 0) render(); });
+      U.bus.on('pc', function () { render(); });   // tracking mode and imported matches arrive after the page has loaded
       U.bus.on('view', function (v) { if (v === 'tracker') { render(); if (!U.isInteractive(document.activeElement)) { try { els.view.focus({ preventScroll: true }); } catch (e) { /* ignore */ } } } });
       window.addEventListener('storage', function (e) {
         if (e.key === U.storage.key(OWN)) checkOwner();

@@ -1,12 +1,12 @@
 /* TOKENIFY — Automatic PC tracking.
- * TOKENIFY Companion (a small Windows app) reads the replay Fortnite saves after each match and sends one summary
+ * TOKENIFY Chest Tracker (a small Windows app, formerly "TOKENIFY Companion") reads the replay Fortnite saves after each match and sends one summary
  * per match to your account. This module links PCs with one-time codes, shows their status, lets you choose how
  * your chests are counted (by hand, automatically, or both), applies imported matches to the Live Counter, and
  * keeps the import history with corrections. Imported counts arrive after each match, never during it. */
 (function (TK) {
   'use strict';
   var U = TK.util, ui = TK.ui, h = U.h, api = TK.api;
-  var DOWNLOAD = 'https://github.com/cjgr4ham/tokenify/releases/latest/download/TOKENIFY-Companion.exe';
+  var DOWNLOAD = 'https://github.com/cjgr4ham/tokenify/releases/latest/download/TOKENIFY-Tracker.exe';
   var RELEASES = 'https://github.com/cjgr4ham/tokenify/releases/latest';
   var KIND = { regular: 'regular', rare: 'rare', buried: 'buried', poster: 'sprite poster', relic: 'sprite vault', other: 'other' };
 
@@ -110,7 +110,7 @@
     el.innerHTML = '';
     el.append(h('span', { class: 'pc-dot', 'aria-hidden': 'true' }), h('span', { class: 'pc-l', text: d.online ? 'PC: ' + stateText(d) : 'PC offline' }),
       last ? h('span', { class: 'pc-m num', text: ' · last match ' + U.fmtInt(last.chests) }) : null);
-    el.title = 'Automatic PC tracking: ' + (d.online ? stateText(d) : 'the companion hasn’t checked in for a while') + (last ? '. Last match: ' + last.chests + ' chests, ' + ago(last.ended_at) + '.' : '') + ' Click for details.';
+    el.title = 'Automatic PC tracking: ' + (d.online ? stateText(d) : 'the tracker on your PC hasn’t checked in for a while') + (last ? '. Last match: ' + last.chests + ' chests, ' + ago(last.ended_at) + '.' : '') + ' Click for details.';
   }
   function renderHome() {
     var el = document.getElementById('home-pc'); if (!el) return;
@@ -189,7 +189,7 @@
             kv('Last match', s.last_match_chests != null ? U.fmtInt(s.last_match_chests) + ' chests' : (st.last_match ? U.fmtInt(st.last_match.chests) + ' chests' : '—')),
             kv('Queued matches', U.fmtInt(s.queued || 0)),
             kv('Replays folder', s.folder === 'missing' ? 'Not found — turn on Record Replays' : s.folder === 'empty' ? 'Found, no replays yet' : s.folder === 'unreadable' ? 'Can’t be read' : s.folder === 'ok' ? 'Found' : '—'),
-            kv('Companion', d.app_version ? 'v' + d.app_version : '—'),
+            kv('Tracker', d.app_version ? 'v' + d.app_version : '—'),
             kv('Linked', U.fmtDate(Date.parse(d.created_at)))
           ]),
           h('div', { class: 'row-actions' }, [
@@ -210,15 +210,16 @@
     p.appendChild(h('h3', { class: 'pc-h', text: devices.length ? 'Add or replace a PC' : 'Set it up (about 2 minutes)' }));
     var steps = h('ol', { class: 'pc-steps' }, [
       h('li', {}, [h('b', { text: 'Turn on replays in Fortnite: ' }), 'Settings → Game → Replays → Record Replays → On.']),
-      h('li', {}, [h('b', { text: 'Download TOKENIFY Companion ' }), 'and run it (one file, no install, no admin rights).']),
-      h('li', {}, [h('b', { text: 'Connect it: ' }), 'press LINK DEVICE below and type the code into the companion.']),
+      h('li', {}, [h('b', { text: 'Download TOKENIFY Chest Tracker ' }), 'and run it (one file, no install, no admin rights). From then on it counts by itself and shows your total and chests per game in a small overlay while you play.']),
+      h('li', {}, [h('b', { text: 'Connect it to this account: ' }), 'press LINK DEVICE below and type the code into the tracker.']),
       h('li', {}, [h('b', { text: 'Play Fortnite normally.' })]),
       h('li', {}, [h('b', { text: 'Your chest totals update after each match.' })])
     ]);
     p.appendChild(steps);
-    var dl = h('a', { class: 'btn-gold', href: DOWNLOAD, rel: 'noopener' }, ['Download companion']);
+    var dl = h('a', { class: 'btn-gold', href: DOWNLOAD, rel: 'noopener' }, ['Download the tracker']);
     p.appendChild(h('div', { class: 'row-actions' }, [dl, btn('Link device', devices.length ? 'ghost' : 'gold', function (b) { startPairing(b); })]));
     p.appendChild(h('p', { class: 'fine', html: 'Windows may warn that the app is from an unknown publisher: it isn’t code-signed yet. Choose <b>More info → Run anyway</b> only if you downloaded it from this button. Source code, licence and checksums: <a href="' + RELEASES + '" target="_blank" rel="noopener">release page</a>.' }));
+    p.appendChild(h('p', { class: 'fine', text: 'Already using TOKENIFY Companion? The Chest Tracker replaces it. Download it and run it once: it closes the old app, keeps this PC’s link and your match history, and adds the overlay.' }));
     var codeBox = h('div', { class: 'pc-code-box', id: 'pc-code-box' });
     p.appendChild(codeBox);
     if (pairing) showCode(codeBox);
@@ -244,7 +245,7 @@
     // Fortnite accounts
     p.appendChild(h('h3', { class: 'pc-h', text: 'Fortnite accounts' }));
     var profs = (st && st.profiles) || [];
-    if (!profs.length) p.appendChild(h('p', { class: 'muted', text: 'None yet. The companion asks which Fortnite account is yours the first time it reads a replay.' }));
+    if (!profs.length) p.appendChild(h('p', { class: 'muted', text: 'None yet. The tracker asks which Fortnite account is yours the first time it reads a replay.' }));
     profs.forEach(function (f) {
       p.appendChild(h('div', { class: 'pc-prof' }, [h('b', { text: f.label || 'Fortnite account' }), h('span', { class: 'fine', text: ' · linked ' + U.fmtDate(Date.parse(f.created_at)) + (f.last_match_at ? ' · last match ' + ago(f.last_match_at) : '') }),
         btn('Unlink', 'ghost', function (b) {
@@ -286,7 +287,7 @@
     box.innerHTML = '';
     if (!pairing) return;
     var left = Math.max(0, pairing.expires - api.now());
-    box.appendChild(h('div', { class: 'pc-code' }, [h('span', { class: 'fine', text: 'Type this code into TOKENIFY Companion' }), h('span', { class: 'code-v mono', text: pairing.code }),
+    box.appendChild(h('div', { class: 'pc-code' }, [h('span', { class: 'fine', text: 'Type this code into TOKENIFY Chest Tracker' }), h('span', { class: 'code-v mono', text: pairing.code }),
       h('span', { class: 'fine', text: 'Works once · expires in ' + Math.ceil(left / 60000) + ' min · waiting for your PC…' })]));
   }
 
@@ -363,18 +364,19 @@
 
   function howPane() {
     return h('div', { class: 'pc-how' }, [
-      h('p', { text: 'TOKENIFY Companion is a small Windows app. Fortnite saves a replay of every match on your PC; when a match ends, the companion reads that file and finds the chests you opened: searched, or broken open, each counted once. It sends TOKENIFY one short summary per match.' }),
+      h('p', { text: 'TOKENIFY Chest Tracker is a small Windows app. Fortnite saves a replay of every match on your PC; when a match ends, the tracker reads that file and finds the chests you opened: searched, or broken open, each counted once. It shows your total and chests per game in a small overlay and, once linked, sends TOKENIFY one short summary per match.' }),
       h('h3', { class: 'pc-h', text: 'What it sends' }),
       h('p', { text: 'Chests opened and when (seconds into the match), chest types, match start and end, Fortnite’s match id (so squad-mates’ results line up), the game and parser versions, and a one-way hash of your Fortnite account id. Never the replay file, other players’ data, your passwords, or anything else from the PC.' }),
       h('h3', { class: 'pc-h', text: 'Good to know' }),
       h('ul', { class: 'pc-notes' }, [
         h('li', { text: 'Only matches from this season count' + (st && st.season_start ? ' (since ' + U.fmtDate(Date.parse(st.season_start)) + ')' : '') + ': the Pirate Token didn’t exist before, so older replays are never read or sent.' }),
         h('li', { text: 'Counts arrive after each match, never during it: Fortnite only makes a replay readable once the match is over.' }),
-        h('li', { text: 'A Fortnite update can change the replay format. If matches stop arriving, update the companion; it keeps unread replays and retries them.' }),
+        h('li', { text: 'A Fortnite update can change the replay format. If matches stop arriving, update the tracker; it keeps unread replays and reads them after the update.' }),
         h('li', { text: 'Your replay only covers your own chests. Each PC player in a squad adds their own; Switch and console players keep counting here.' }),
         h('li', { text: 'Counts come from your PC’s replay files: they are replay-derived, not verified by Epic.' }),
-        h('li', { text: 'The companion only reads replay files. It never touches the Fortnite program, its memory, its files or your input.' }),
-        h('li', { text: 'TOKENIFY Companion is an independent fan tool, not made or endorsed by Epic Games. Open source (GPL-3.0).' })
+        h('li', { text: 'A chest the replay shows disappearing without saying who broke it (this can happen when several are smashed at once) is listed in the tracker as "ambiguous". It is not counted unless you add it yourself.' }),
+        h('li', { text: 'The tracker only reads replay files. It never touches the Fortnite program, its memory, its files or your input. Its overlay is an ordinary always-on-top window; Fortnite has to be in Windowed Fullscreen for it to show.' }),
+        h('li', { text: 'TOKENIFY Chest Tracker is an independent fan tool, not made, reviewed or endorsed by Epic Games. Epic does not say which third-party tools are allowed, so nobody can promise that any tool is risk-free. Open source (GPL-3.0).' })
       ])
     ]);
   }
@@ -395,7 +397,7 @@
         ]));
       } else {
         box.appendChild(h('p', { class: 'fine', text: 'Connect your PC to count chests automatically after matches.' }));
-        box.appendChild(h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px' } }, [h('a', { class: 'btn-gold', href: DOWNLOAD, rel: 'noopener' }, ['Download companion']), btn('Link device', 'ghost', function () { openPanel('pc'); })]));
+        box.appendChild(h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px' } }, [h('a', { class: 'btn-gold', href: DOWNLOAD, rel: 'noopener' }, ['Download the tracker']), btn('Link device', 'ghost', function () { openPanel('pc'); })]));
       }
     }
     draw();

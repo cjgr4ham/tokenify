@@ -4,17 +4,16 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
-    <AssemblyName>TOKENIFY-Companion</AssemblyName>
-    <RootNamespace>Tokenify.Companion</RootNamespace>
-    <Product>TOKENIFY Companion</Product>
-    <Description>Counts the chests you open in Fortnite from your replays and sends them to TOKENIFY.</Description>
-    <Version>1.0.0</Version>
+    <AssemblyName>TOKENIFY-Tracker</AssemblyName>
+    <RootNamespace>Tokenify.Tracker</RootNamespace>
+    <Product>TOKENIFY Chest Tracker</Product>
+    <Description>Counts the chests you open and destroy in Fortnite from your replays, and shows them on a small overlay.</Description>
     <ApplicationIcon>Assets\tokenify.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationVisualStyles>true</ApplicationVisualStyles>
     <ApplicationUseCompatibleTextRendering>false</ApplicationUseCompatibleTextRendering>
-    <!-- WinForms dark mode (follows the Windows theme) is still flagged experimental. -->
+    <!-- WinForms dark mode is still flagged experimental. -->
     <NoWarn>$(NoWarn);WFO5001;WFO5002</NoWarn>
   </PropertyGroup>
 
@@ -30,13 +29,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.14" />
-    <!-- SQLite native library: 2.1.11 and older bundle a SQLite with a known vulnerability (GHSA-2m69-gcr7-jv3q). -->
-    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.14" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\Tokenify.ReplayReader\Tokenify.ReplayReader.csproj" />
+    <ProjectReference Include="..\Tokenify.Core\Tokenify.Core.csproj" />
+    <ProjectReference Include="..\Tokenify.Overlay\Tokenify.Overlay.csproj" />
   </ItemGroup>
 
   <ItemGroup>

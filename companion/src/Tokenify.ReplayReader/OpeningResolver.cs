@@ -6,6 +6,8 @@ namespace Tokenify.ReplayReader;
 /// <param name="Key">Identity of the physical chest for the whole match (level path, or class + spawn position).</param>
 /// <param name="StableKey">False when the only identity available was a per-channel network id.</param>
 /// <param name="ClassPath">Replicated class of the container.</param>
+/// <param name="Instant">The container's "instant death" flag (destroyed in one go).</param>
+/// <param name="DamageContext">The update carried a damage record (destroyed by an ability or effect).</param>
 public readonly record struct ContainerUpdate(
     float Time,
     uint Channel,
@@ -15,9 +17,12 @@ public readonly record struct ContainerUpdate(
     uint? SearchingPawn,
     bool? Searched,
     bool? Destroyed,
-    uint? AnimCount);
+    uint? AnimCount,
+    bool? Instant = null,
+    bool DamageContext = false);
 
 /// <summary>One opening of a container (searched, or destroyed so its loot spilled).</summary>
+/// <param name="Opener">The character the game named on the container, or null when it named nobody.</param>
 /// <param name="Stale">The state arrived together with the channel (searched before it came into view).</param>
 /// <param name="Reopened">The same physical container had been opened before in this match (it was refilled).</param>
 public sealed record ContainerOpening(
@@ -28,7 +33,10 @@ public sealed record ContainerOpening(
     bool Destroyed,
     bool Stale,
     bool StableKey,
-    bool Reopened);
+    bool Reopened,
+    uint? AnimCount = null,
+    bool Instant = false,
+    bool DamageContext = false);
 
 /// <summary>
 /// Turns the raw stream of container updates into openings, without double counting.
@@ -44,6 +52,8 @@ public sealed record ContainerOpening(
 /// again is a new opening (when the registry allows it).</item>
 /// <item>A container destroyed with a <c>SearchingPawn</c> (the server sets it to whoever destroyed it) counts
 /// like an opening, once (when the registry allows it).</item>
+/// <item>A never-opened container destroyed with nobody named is recorded with a null opener: it is counted for
+/// no one here, and left to <see cref="EvidenceAnalyzer"/> to classify.</item>
 /// </list>
 /// This class is pure logic so it can be unit-tested without replay files.
 /// </summary>
@@ -54,6 +64,7 @@ public sealed class OpeningResolver
         public float OpenedAt;
         public bool? Searched;
         public uint? LastSearcher;
+        public bool UnnamedDestroy;
     }
 
     private readonly ChestRegistry _registry;
@@ -68,7 +79,13 @@ public sealed class OpeningResolver
     /// <summary>A channel (re)opened: everything known about its previous occupant is forgotten.</summary>
     public void ChannelOpened(uint channel, float time) => _channels[channel] = new ChannelState { OpenedAt = time };
 
-    public void ChannelClosed(uint channel) => _channels.Remove(channel);
+    /// <summary>Returns true when the container on that channel had been opened or destroyed while it was open.</summary>
+    public bool ChannelClosed(uint channel)
+    {
+        var touched = _channels.TryGetValue(channel, out var ch) && (ch.Searched == true || ch.UnnamedDestroy);
+        _channels.Remove(channel);
+        return touched;
+    }
 
     public void Observe(ContainerUpdate u)
     {
@@ -108,12 +125,22 @@ public sealed class OpeningResolver
             return;
         }
 
-        if (_registry.CountDestroyed && u.Destroyed == true && u.SearchingPawn is uint destroyer && destroyer != 0
-            && ch.Searched != true && (!_opened.Contains(u.Key) || ch.Searched == false))
+        if (_registry.CountDestroyed && u.Destroyed == true && ch.Searched != true && (!_opened.Contains(u.Key) || ch.Searched == false))
         {
-            // Broken instead of opened: the loot spills out and the server records who broke it.
-            ch.Searched = true;
-            Record(u, destroyer, destroyed: true, stale);
+            if (u.SearchingPawn is uint destroyer && destroyer != 0)
+            {
+                // Broken instead of opened: the loot spills out and the server records who broke it.
+                ch.Searched = true;
+                Record(u, destroyer, destroyed: true, stale);
+            }
+            else if (!ch.UnnamedDestroy)
+            {
+                // Broken with nobody named. Not an opening for anyone; kept (once) for the evidence analysis.
+                // The chest is deliberately not marked as opened: a named record may still follow.
+                ch.UnnamedDestroy = true;
+                _openings.Add(new ContainerOpening(u.Time, u.Key, u.ClassPath, null, true, stale, u.StableKey, _opened.Contains(u.Key),
+                    u.AnimCount, u.Instant == true, u.DamageContext));
+            }
         }
     }
 
@@ -126,7 +153,8 @@ public sealed class OpeningResolver
         }
 
         _opened.Add(u.Key);
-        _openings.Add(new ContainerOpening(u.Time, u.Key, u.ClassPath, opener, destroyed, stale, u.StableKey, reopened));
+        _openings.Add(new ContainerOpening(u.Time, u.Key, u.ClassPath, opener, destroyed, stale, u.StableKey, reopened,
+            u.AnimCount, u.Instant == true, u.DamageContext));
     }
 
     /// <summary>

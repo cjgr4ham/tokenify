@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The in-game overlay: how it is drawn (pure, renders to a bitmap, tested by rendering pictures) and the
+    Windows window that shows it. It is an ordinary separate window that Windows draws on top of others. It never
+    touches the game: no injection, no hooks into another program, no reading of the screen.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>Tokenify.Overlay</AssemblyName>
+    <RootNamespace>Tokenify.Overlay</RootNamespace>
+    <Product>TOKENIFY Chest Tracker</Product>
+    <NoWarn>$(NoWarn);WFO5001;WFO5002</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Tokenify.Core\Tokenify.Core.csproj" />
+  </ItemGroup>
+
+</Project>

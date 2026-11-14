@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Command-line replay analyser: the proof that a replay can be read, before any window is drawn.
+      tokenify-analyze <file-or-folder> [more...] [-e|-events] [-json] [-expect truth.json]
+    It only ever reads replay files; it never touches the game.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>tokenify-analyze</AssemblyName>
+    <RootNamespace>Tokenify.Analyze</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Tokenify.ReplayReader\Tokenify.ReplayReader.csproj" />
+  </ItemGroup>
+
+</Project>

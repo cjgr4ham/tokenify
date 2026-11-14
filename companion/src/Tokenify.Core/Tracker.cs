@@ -1,54 +1,77 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Tokenify.ReplayReader;
 
-namespace Tokenify.Companion;
+namespace Tokenify.Core;
 
-internal enum FolderState { Ok, Empty, Missing, Unreadable }
+public enum FolderState { Ok, Empty, Missing, Unreadable }
 
-internal enum Activity { NotConnected, Paused, FolderMissing, InMatch, Processing, Syncing, NeedsAttention, Waiting, UpToDate, Offline }
+/// <summary>What the tracker is doing right now, in the order the overlay cares about.</summary>
+public enum Activity { Paused, FolderMissing, InMatch, Processing, NeedsAttention, Waiting, Ready }
 
-/// <summary>Everything the tray and the windows show, as one immutable snapshot.</summary>
-internal sealed record EngineSnapshot(
+public enum SyncState { NotLinked, Disconnected, Offline, Syncing, Queued, UpToDate }
+
+/// <summary>The party's total for the last squad game, as far as TOKENIFY has it.</summary>
+public sealed record SquadInfo(int Chests, bool Complete, int Members, int Reported, DateTime? EndedUtc);
+
+/// <summary>Everything the overlay, the tray and the windows show, as one immutable snapshot.</summary>
+public sealed record TrackerSnapshot(
+    Settings Settings,
+    Stats Stats,
+    Activity Activity,
+    string Status,
+    SyncState Sync,
+    string SyncText,
     bool Paired,
     string? Username,
     string? DeviceName,
-    string Tracking,
-    bool Paused,
-    bool Revoked,
+    bool Online,
     string FolderPath,
     FolderState Folder,
     int ReplayFiles,
-    Activity Activity,
-    string Status,
     int Queued,
     IReadOnlyList<string> Attention,
     MatchRow? LastMatch,
     DateTime? LastSyncUtc,
-    bool Online,
     int HistoryHeld,
     DateTime? HistoryFrom,
     DateTime? HistoryTo,
     int UnsupportedFiles,
     ProfileRow? AskProfile,
+    ProfileRow? ActiveProfile,
     int PreSeasonFiles,
-    DateTime SeasonStartUtc);
+    DateTime SeasonStartUtc,
+    int NeedsReview,
+    SquadInfo? Squad,
+    int ManualTaps);
 
 /// <summary>
-/// The companion's background work, on two low-priority threads:
+/// The tracker's background work, on two low-priority threads:
 /// <list type="bullet">
 /// <item>Scanner: watches the replay folder (file notifications + a light periodic listing), waits until a replay is
 /// finished (Fortnite writes its decryption key only when the match ends, and the file must stop changing), reads it
-/// in a child process and stores the result. Files are only ever opened read-only.</item>
-/// <item>Sync: checks in with TOKENIFY, confirms the player's Fortnite account, and uploads one summary per match,
-/// retrying with back-off while offline. Uploads are idempotent on the server, so retries never double count.</item>
+/// in a child process and stores the result with its evidence. Files are only ever opened read-only. It works
+/// with or without a TOKENIFY account.</item>
+/// <item>Sync (only when linked): checks in with TOKENIFY, confirms the player's Fortnite account, and uploads one
+/// summary per match and any corrections, retrying with back-off while offline. Uploads are idempotent on the
+/// server, so retries never double count.</item>
 /// </list>
+/// Nothing here reads, opens or talks to the game: only the replay files it leaves on disk.
 /// </summary>
-internal sealed class Engine : IDisposable
+public sealed class Tracker : IDisposable
 {
     private static readonly TimeSpan ParseTimeout = TimeSpan.FromSeconds(120);
     private static readonly TimeSpan HelloEvery = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan ReconcileEvery = TimeSpan.FromMinutes(30);
+    private static readonly JsonSerializerOptions EventJson = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
 
     private readonly Store _store;
     private readonly ApiClient _api = new();
@@ -59,40 +82,83 @@ internal sealed class Engine : IDisposable
     private Thread? _scanThread, _syncThread;
     private FileSystemWatcher? _watcher;
     private string? _watchedFolder;
+    private Settings _settings;
 
     // live state (guarded by _gate)
     private FolderState _folder = FolderState.Missing;
     private string _folderPath = "";
     private int _replayFiles;
-    private bool _anyLive, _processing, _syncing, _online = true, _revoked, _statusDirty = true;
+    private bool _anyLive, _processing, _syncing, _online = true, _revoked, _statusDirty = true, _correctionsUnsupported;
     private DateTime? _lastSyncUtc;
-    private DateTime _nextHello = DateTime.MinValue;
+    private DateTime _nextHello = DateTime.MinValue, _nextReconcile = DateTime.MinValue;
+    private long _liveSince;
+    /// <summary>When the replay reader last failed to start (0 = it works). See ReplayWorker.UnavailablePrefix.</summary>
+    private long _readerBrokenAt;
     private string? _username, _deviceName;
-    private string _tracking = "auto";
     private readonly HashSet<string> _notified = new();
+    private readonly List<long> _taps = new();
 
-    public event Action<EngineSnapshot>? Changed;
+    public event Action<TrackerSnapshot>? Changed;
     /// <summary>(title, text): a balloon the tray may show.</summary>
     public event Action<string, string>? Notify;
+    /// <summary>A match that has just been counted for the first time (not history): the match and its chest count.</summary>
+    public event Action<MatchRow, int>? MatchImported;
 
-    public Engine(Store store)
+    public Tracker(Store store)
     {
         _store = store;
+        _settings = store.LoadSettings();
         _username = store.Get("account.username");
         _deviceName = store.Get("device.name");
-        _tracking = store.Get("account.tracking") ?? "auto";
         if (store.Get("history.cutoff") is null)
         {
             store.Set("history.cutoff", Store.Now().ToString(CultureInfo.InvariantCulture));
         }
+        try
+        {
+            if (JsonSerializer.Deserialize<List<long>>(store.Get("manual.taps") ?? "[]") is { } saved) _taps.AddRange(saved);
+        }
+        catch (JsonException) { }
         _folderPath = ResolveFolder();
         (_folder, var files) = ListReplays(_folderPath);
         _replayFiles = files.Count;
     }
 
     public Store Store => _store;
+    public Settings Settings => _settings;
     public bool Paired => Credentials.Load(_store) is not null;
-    public bool Paused => _store.Flag("tracking.paused");
+    public bool Paused => _settings.Tracking.Paused;
+
+    /// <summary>Changes settings: applies the change to a copy, saves it and tells everyone.</summary>
+    public void UpdateSettings(Action<Settings> change)
+    {
+        Settings before, after;
+        lock (_gate)
+        {
+            before = _settings;
+            after = before.Clone();
+            change(after);
+            after.Sanitized();
+            _settings = after;
+        }
+        _store.SaveSettings(after);
+
+        if (before.Tracking.CountDestroyed != after.Tracking.CountDestroyed)
+        {
+            // What is sent for a match with destroyed chests changes with this choice.
+            _store.RequeueSent(onlyWithDestroyed: true);
+            Log.Info(after.Tracking.CountDestroyed ? "Destroyed chests are counted" : "Destroyed chests are not counted");
+            SyncNow();
+        }
+        if (before.Tracking.Paused != after.Tracking.Paused)
+        {
+            Log.Info(after.Tracking.Paused ? "Tracking paused" : "Tracking resumed");
+            ScanNow();
+            SyncNow();
+        }
+        if (before.Tracking.ReplayFolder != after.Tracking.ReplayFolder) ScanNow();
+        Publish();
+    }
 
     /// <summary>
     /// Start of the current season (Chapter 7 Season 3: Nov 1, 2026, 12:00 AM Eastern). The Pirate Token didn't
@@ -122,7 +188,7 @@ internal sealed class Engine : IDisposable
         _syncThread = new Thread(SyncLoop) { IsBackground = true, Name = "TOKENIFY sync", Priority = ThreadPriority.BelowNormal };
         _scanThread.Start();
         _syncThread.Start();
-        Log.Info($"TOKENIFY Companion {AppInfo.Version} started (parser {AppInfo.ParserVersion}, chest registry v{ChestRegistry.Default.Version})");
+        Log.Info($"{AppInfo.Name} {AppInfo.Version} started (counting rules {AppInfo.ParserVersion}, chest registry v{ChestRegistry.Default.Version})");
     }
 
     public void ScanNow() => _scanWake.Set();
@@ -133,22 +199,7 @@ internal sealed class Engine : IDisposable
         _syncWake.Set();
     }
 
-    public void SetPaused(bool paused)
-    {
-        _store.SetFlag("tracking.paused", paused);
-        Log.Info(paused ? "Automatic tracking paused" : "Automatic tracking resumed");
-        ScanNow();
-        SyncNow();
-        Publish();
-    }
-
-    public void SetFolder(string? folder)
-    {
-        _store.Set("demos.folder", string.IsNullOrWhiteSpace(folder) ? null : folder);
-        ScanNow();
-    }
-
-    public string ResolveFolder() => _store.Get("demos.folder") is { Length: > 0 } custom ? custom : AppPaths.DefaultDemos;
+    public string ResolveFolder() => _settings.Tracking.ReplayFolder is { Length: > 0 } custom ? custom : AppPaths.DefaultDemos;
 
     // ======================================================================================= scanner
 
@@ -163,6 +214,7 @@ internal sealed class Engine : IDisposable
             catch (Exception ex)
             {
                 Log.Error("Scan failed", ex);
+                SetLive(false);   // an aborted pass must not leave "match in progress" on the overlay
             }
 
             Publish();
@@ -188,7 +240,7 @@ internal sealed class Engine : IDisposable
 
     private static long Ms(DateTime utc) => new DateTimeOffset(DateTime.SpecifyKind(utc, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
 
-    /// <summary>True while another program (Fortnite) has the file open for writing.</summary>
+    /// <summary>True while another program (Fortnite) has the file open for writing. Only ever asks to read.</summary>
     private static bool IsBeingWritten(string path)
     {
         try
@@ -219,14 +271,14 @@ internal sealed class Engine : IDisposable
 
         if (state is FolderState.Missing or FolderState.Unreadable)
         {
-            lock (_gate) { _anyLive = false; }
+            SetLive(false);
             return;
         }
 
         EnsureWatcher(folder);
-        if (Paused || !Paired)
+        if (Paused)
         {
-            lock (_gate) { _anyLive = false; }
+            SetLive(false);
             return;
         }
 
@@ -271,7 +323,7 @@ internal sealed class Engine : IDisposable
 
             if (isHistory && historyChoice is null)
             {
-                // An older replay found at first launch: only its date is read until the player decides whether to import history.
+                // An older replay found at first launch: only its date is read until the player decides whether to count history.
                 if (!unchanged || row!.State != "held")
                 {
                     _store.PutFile(new FileRow(f.Name, f.Length, mtime, "held", now, 0, null, null, 0, null,
@@ -311,10 +363,26 @@ internal sealed class Engine : IDisposable
                 continue;
             }
 
+            // The reader could not be started a moment ago: try again once a minute, not for every file on every pass.
+            long brokenAt;
+            lock (_gate) { brokenAt = _readerBrokenAt; }
+            if (brokenAt != 0 && now - brokenAt < 60_000) break;
+
             Parse(f, mtime, row, isHistory);
+            lock (_gate) { brokenAt = _readerBrokenAt; }
+            if (brokenAt != 0) break;
         }
 
-        lock (_gate) { _anyLive = anyLive; }
+        SetLive(anyLive);
+    }
+
+    private void SetLive(bool live)
+    {
+        lock (_gate)
+        {
+            if (live && !_anyLive) _liveSince = Store.Now();
+            _anyLive = live;
+        }
     }
 
     private void Parse(FileInfo f, long mtime, FileRow? row, bool historical)
@@ -335,6 +403,21 @@ internal sealed class Engine : IDisposable
         }
 
         var now = Store.Now();
+        if (result is null && failure is not null && failure.StartsWith(ReplayWorker.UnavailablePrefix, StringComparison.Ordinal))
+        {
+            // Nothing is wrong with the replay: the tracker's own program file was moved, renamed or blocked while
+            // it runs, so the reader cannot start. No attempt is held against the file; it is read as soon as the
+            // tracker runs from a working file again.
+            bool first;
+            lock (_gate)
+            {
+                first = _readerBrokenAt == 0;
+                _readerBrokenAt = now;
+            }
+            if (first) Log.Error($"{f.Name}: {failure}. Exit the tracker and start it again from where its file is now.");
+            return;
+        }
+        lock (_gate) { _readerBrokenAt = 0; }
         if (result is null)
         {
             Log.Warn($"{f.Name}: {failure}");
@@ -382,6 +465,11 @@ internal sealed class Engine : IDisposable
             Started = started,
             Ended = started + result.LengthMs,
             Chests = result.ChestsOpened,
+            Searched = result.Searched,
+            Destroyed = result.Destroyed,
+            Ambiguous = result.Ambiguous,
+            NoRecord = result.Unobservable,
+            Events = JsonSerializer.Serialize(result.Events, EventJson),
             Breakdown = JsonSerializer.Serialize(Breakdown(result)),
             Times = JsonSerializer.Serialize(result.Chests.Select(c => Math.Round(c.Time, 1)).ToArray()),
             Status = result.Status == ScanStatus.Complete ? "complete" : "partial",
@@ -390,16 +478,18 @@ internal sealed class Engine : IDisposable
             Build = result.Branch,
             Historical = historical,
         };
+        if (!match.HasServerIdentity) match.Fingerprint = Fingerprint(f.FullName);
         match.Upload = decision switch
         {
             "not-mine" => Upload.NotMine,
             "ask" => Upload.HeldProfile,
             _ when match.Status == "partial" => Upload.HeldPartial,
+            _ when !match.HasServerIdentity => Upload.LocalOnly,
             _ => Upload.Pending,
         };
-        if (match.SessionId is null && match.ReplayGuid is null)
+        if (!match.HasServerIdentity && match.Fingerprint is null)
         {
-            _store.PutFile(new FileRow(f.Name, f.Length, mtime, "failed", now, 3, "the replay has no match id", AppInfo.ParserVersion, registry.Version, row?.MatchId, started));
+            _store.PutFile(new FileRow(f.Name, f.Length, mtime, "failed", now, 3, "the replay has nothing to identify the match by", AppInfo.ParserVersion, registry.Version, row?.MatchId, started));
             return;
         }
 
@@ -408,20 +498,32 @@ internal sealed class Engine : IDisposable
         if (existing is null)
         {
             id = _store.InsertMatch(match);
-            Log.Info($"{f.Name}: {match.Chests} chests ({match.Status}){(historical ? ", history" : "")}");
+            match.Id = id;
+            Log.Info($"{f.Name}: {match.Chests} chests ({match.Searched} searched, {match.Destroyed} destroyed, {match.Ambiguous} ambiguous; {match.Status}){(historical ? ", history" : "")}");
+            AttachTaps(match);
+            if (!historical && decision == "mine" && match.Status == "complete")
+            {
+                var count = match.Effective(_settings.Tracking.CountDestroyed);
+                try { MatchImported?.Invoke(match, count); } catch { /* UI gone */ }
+            }
         }
         else
         {
             id = existing.Id;
             var changed = existing.Chests != match.Chests || existing.Times != match.Times || existing.Parser != match.Parser
-                          || existing.Registry != match.Registry || existing.Status != match.Status || existing.MatchKey != match.MatchKey;
+                          || existing.Registry != match.Registry || existing.Status != match.Status || existing.MatchKey != match.MatchKey
+                          || existing.Events is null || existing.Ambiguous != match.Ambiguous || existing.Destroyed != match.Destroyed;
             if (changed)
             {
                 match.Id = existing.Id;
-                if (existing.Upload is Upload.NotMine or Upload.Ignored) match.Upload = existing.Upload;
+                // A re-read never changes whose match it is or a decision the player already made about it.
+                match.Upload = existing.Upload is Upload.NotMine or Upload.Ignored ? existing.Upload
+                    : existing.Upload == Upload.Sent && existing.Chests == match.Chests && existing.Times == match.Times && existing.Status == match.Status ? Upload.Sent
+                    : match.Upload;
                 match.Historical = existing.Historical;
                 _store.UpdateParsed(match);
-                Log.Info($"{f.Name}: re-read with parser {match.Parser}: {existing.Chests} -> {match.Chests} chests");
+                if (match.Upload == Upload.Sent) _store.MarkSent(match.Id, existing.ServerId, existing.ServerChests, existing.ServerStatus);
+                if (existing.Chests != match.Chests) Log.Info($"{f.Name}: re-read with counting rules {match.Parser}: {existing.Chests} -> {match.Chests} chests");
             }
         }
 
@@ -444,22 +546,39 @@ internal sealed class Engine : IDisposable
         return clean.Length is >= 8 and <= 64 ? clean : null;
     }
 
+    /// <summary>Identity of last resort for a replay with no ids: a hash of its header, the same for any copy or rename.</summary>
+    private static string? Fingerprint(string path)
+    {
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var buffer = new byte[(int)Math.Min(16384, fs.Length)];
+            fs.ReadExactly(buffer);
+            return Convert.ToHexStringLower(SHA256.HashData(buffer))[..32];
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+    }
+
     private static Dictionary<string, int> Breakdown(ScanResult r)
     {
         var d = r.ChestsByKind();
-        var destroyed = r.Chests.Count(c => c.Destroyed);
-        var reopened = r.Chests.Count(c => c.Reopened);
-        var unverified = r.Chests.Count(c => c.Unverified);
-        if (destroyed > 0) d["destroyed"] = destroyed;
-        if (reopened > 0) d["reopened"] = reopened;
-        if (unverified > 0) d["unverified"] = unverified;
+        void Add(string key, int value) { if (value > 0) d[key] = value; }
+        Add("searched", r.Searched);
+        Add("destroyed", r.Destroyed);
+        Add("corroborated", r.Corroborated);
+        Add("ambiguous", r.Ambiguous);
+        Add("reopened", r.Chests.Count(c => c.Reopened));
+        Add("unverified", r.Chests.Count(c => c.Unverified));
         return d;
     }
 
     /// <summary>
     /// Whose Fortnite account recorded this replay? The first account ever seen on this PC is taken to be the
     /// owner's (they are told, and can change it); any further account is asked about once before anything of it is
-    /// sent. A "not mine" account is never uploaded.
+    /// counted or sent. A "not mine" account is never counted.
     /// </summary>
     private string DecideProfile(string hash, string? name)
     {
@@ -476,11 +595,11 @@ internal sealed class Engine : IDisposable
         _store.PutProfile(new ProfileRow(hash, name, decision, false, now, now, null));
         if (first)
         {
-            RaiseNotify("TOKENIFY Companion", $"Counting chests for Fortnite player {name ?? "(unknown name)"}. Not you? Open the companion to change it.");
+            RaiseNotify("TOKENIFY", $"Counting chests for Fortnite player {name ?? "(unknown name)"}. Not you? Open the tracker to change it.");
         }
         else
         {
-            RaiseNotify("TOKENIFY Companion", $"Another Fortnite account ({name ?? "unknown"}) played on this PC. Open the companion to say whether it's yours.");
+            RaiseNotify("TOKENIFY", $"Another Fortnite account ({name ?? "unknown"}) played on this PC. Open the tracker to say whether it's yours.");
         }
         _syncWake.Set();
         return decision;
@@ -502,25 +621,26 @@ internal sealed class Engine : IDisposable
         {
             _store.SetUploadForProfile(hash, Upload.HeldProfile, Upload.NotMine);
             _store.SetUploadForProfile(hash, Upload.Pending, Upload.NotMine);
+            _store.SetUploadForProfile(hash, Upload.LocalOnly, Upload.NotMine);
         }
         Log.Info($"Fortnite account {hash[..8]}… marked as {(mine ? "mine" : "not mine")}");
         SyncNow();
         Publish();
     }
 
-    /// <summary>History choice (setup): import the replays that were already on the PC, or start from now.</summary>
+    /// <summary>History choice (setup): count the replays that were already on the PC, or start from now.</summary>
     public void SetHistoryChoice(bool import)
     {
         _store.Set("history.choice", import ? "import" : "skip");
         _store.ReleaseHistory(import);
         if (!import) _store.SetFileState("skipped", "held");
         else _store.SetFileState("new", "held");
-        Log.Info(import ? "Importing replays that were already on this PC" : "Skipping replays from before setup");
+        Log.Info(import ? "Counting replays that were already on this PC" : "Skipping replays from before setup");
         ScanNow();
         Publish();
     }
 
-    /// <summary>Older replays that could be imported: only this season's (earlier seasons are counted separately, never imported).</summary>
+    /// <summary>Older replays that could be counted: only this season's (earlier seasons are never counted).</summary>
     public (int Count, DateTime? From, DateTime? To, int Processed, int PreSeason) HistoryPreview()
     {
         var folderFiles = ListReplays(ResolveFolder()).Files;
@@ -545,19 +665,11 @@ internal sealed class Engine : IDisposable
         return (count, from, to, processed, preSeason);
     }
 
-    /// <summary>The player chooses to send a match that could only be read partly (or to ignore it).</summary>
-    public void ResolvePartial(long matchId, bool send)
+    /// <summary>"Rescan replays": every replay still on disk is read again. Nothing already counted is duplicated.</summary>
+    public void Rescan()
     {
-        _store.SetUpload(matchId, send ? Upload.Pending : Upload.Ignored);
-        SyncNow();
-        Publish();
-    }
-
-    /// <summary>Re-read every replay still on disk (e.g. after a Fortnite update) and re-send what changed.</summary>
-    public void ClearCache()
-    {
-        _store.ClearCache();
-        Log.Info("Local cache cleared; replays still on disk will be read again");
+        _store.ForgetFiles();
+        Log.Info("Rescan: replays still on disk will be read again");
         ScanNow();
         Publish();
     }
@@ -606,6 +718,141 @@ internal sealed class Engine : IDisposable
         }
     }
 
+    // ======================================================================================= corrections and sessions
+
+    /// <summary>The player's own count for a match (null takes the correction away again). The replay's count stays on record.</summary>
+    public void Correct(long matchId, int? count, string? reason)
+    {
+        var m = _store.GetMatch(matchId);
+        if (m is null) return;
+        if (count is int c) count = Math.Clamp(c, 0, 400);
+        _store.Correct(matchId, count, reason, "you", m.ReplayCount(_settings.Tracking.CountDestroyed));
+        if (m.Upload == Upload.HeldPartial && count is not null) _store.SetUpload(matchId, m.HasServerIdentity ? Upload.Pending : Upload.LocalOnly);
+        _store.SetReviewed(matchId, true);
+        Log.Info(count is null ? $"Correction removed from {m.File}" : $"{m.File} corrected: replay {m.ReplayCount(_settings.Tracking.CountDestroyed)}, you {count}");
+        SyncNow();
+        Publish();
+    }
+
+    public void SetExcluded(long matchId, bool excluded)
+    {
+        _store.SetExcluded(matchId, excluded);
+        SyncNow();
+        Publish();
+    }
+
+    public void SetReviewed(long matchId, bool reviewed)
+    {
+        _store.SetReviewed(matchId, reviewed);
+        Publish();
+    }
+
+    /// <summary>A partly read match: use its count as it is (recorded as the player's decision), or leave it out.</summary>
+    public void ResolvePartial(long matchId, bool use)
+    {
+        var m = _store.GetMatch(matchId);
+        if (m is null) return;
+        if (use) Correct(matchId, m.ReplayCount(_settings.Tracking.CountDestroyed), "partly read replay, count accepted as it is");
+        else
+        {
+            _store.SetUpload(matchId, Upload.Ignored);
+            Publish();
+        }
+    }
+
+    public void StartSession()
+    {
+        _store.StartSession(Store.Now());
+        Log.Info("Session started");
+        Publish();
+    }
+
+    public void EndSession()
+    {
+        _store.EndSession(Store.Now());
+        Log.Info("Session ended");
+        Publish();
+    }
+
+    /// <summary>
+    /// One tap of the optional manual shortcut: the player's own running count for the match being played. It is
+    /// only ever shown next to the replay's count afterwards; it never adds to the total by itself.
+    /// </summary>
+    public void ManualTap()
+    {
+        lock (_gate)
+        {
+            var now = Store.Now();
+            if (_taps.Count > 0 && now - _taps[^1] < 150) return;   // a held key or a bounce is one tap
+            _taps.Add(now);
+            _taps.RemoveAll(t => now - t > 3 * 3600_000L);
+            _store.Set("manual.taps", JsonSerializer.Serialize(_taps));
+        }
+        Publish();
+    }
+
+    public void UndoManualTap()
+    {
+        lock (_gate)
+        {
+            if (_taps.Count == 0) return;
+            _taps.RemoveAt(_taps.Count - 1);
+            _store.Set("manual.taps", JsonSerializer.Serialize(_taps));
+        }
+        Publish();
+    }
+
+    private void AttachTaps(MatchRow match)
+    {
+        int count;
+        lock (_gate)
+        {
+            count = _taps.Count(t => t >= match.Started && t <= match.Ended + 120_000);
+            if (count == 0) return;
+            _taps.RemoveAll(t => t <= match.Ended + 120_000);
+            _store.Set("manual.taps", JsonSerializer.Serialize(_taps));
+        }
+        _store.SetManualTaps(match.Id, count);
+        match.ManualTaps = count;
+    }
+
+    public void DeleteHistory()
+    {
+        _store.DeleteHistory();
+        lock (_gate) { _taps.Clear(); }
+        _store.Set("manual.taps", null);
+        // Replays already on disk are history again: they are not silently counted back in.
+        _store.Set("history.cutoff", Store.Now().ToString(CultureInfo.InvariantCulture));
+        _store.Set("history.choice", "skip");
+        Log.Info("History deleted on this PC");
+        ScanNow();
+        Publish();
+    }
+
+    public void ResetSettings()
+    {
+        _store.ResetSettings();
+        lock (_gate) { _settings = _store.LoadSettings(); }
+        _settings.General.SetupDone = true;
+        _store.SaveSettings(_settings);
+        Log.Info("Settings reset to defaults");
+        Publish();
+    }
+
+    /// <summary>The chest events stored with a match (empty when it was counted by a version that kept none).</summary>
+    public static List<ChestEvent> EventsOf(MatchRow match)
+    {
+        if (string.IsNullOrEmpty(match.Events)) return new();
+        try
+        {
+            return JsonSerializer.Deserialize<List<ChestEvent>>(match.Events, EventJson) ?? new();
+        }
+        catch (JsonException)
+        {
+            return new();
+        }
+    }
+
     // ======================================================================================= pairing
 
     public async Task<(bool Ok, string Message)> Pair(string code)
@@ -640,14 +887,13 @@ internal sealed class Engine : IDisposable
         var username = ApiResult.Text(r.Body?["account"]?["username"]);
         _store.Set("account.username", username);
         _store.Set("device.name", name);
-        _store.Set("account.tracking", r.Str("tracking") ?? "auto");
         lock (_gate)
         {
             _username = username;
             _deviceName = name;
-            _tracking = r.Str("tracking") ?? "auto";
             _revoked = false;
             _nextHello = DateTime.MinValue;
+            _nextReconcile = DateTime.MinValue;
             _statusDirty = true;
         }
         // Anything waiting for a decision about this Fortnite account is re-checked against the new account.
@@ -668,6 +914,7 @@ internal sealed class Engine : IDisposable
             await _api.Call("tk_device_disconnect", new JsonObject { ["p_device"] = dev.Id.ToString(), ["p_secret"] = dev.Secret }, _cts.Token);
         }
         Credentials.Clear(_store);
+        _store.Set("squad.last", null);
         lock (_gate) { _username = null; _deviceName = null; _revoked = false; }
         Log.Info("Disconnected from TOKENIFY");
         Publish();
@@ -728,7 +975,7 @@ internal sealed class Engine : IDisposable
             {
                 _store.PutProfile(p with { Error = "conflict" });
                 _store.SetUploadForProfile(p.Hash, Upload.Pending, Upload.Conflict);
-                RaiseNotify("TOKENIFY Companion", $"The Fortnite account {p.Name ?? ""} is linked to a different TOKENIFY account, so its matches aren't sent here.");
+                RaiseNotify("TOKENIFY", $"The Fortnite account {p.Name ?? ""} is linked to a different TOKENIFY account, so its matches aren't sent here.");
             }
             else if (HandleDeviceError(c))
             {
@@ -746,6 +993,10 @@ internal sealed class Engine : IDisposable
         if (due.Count == 0)
         {
             MarkOnline(true);
+            await SendCorrections(dev, ct);
+            bool reconcileDue;
+            lock (_gate) { reconcileDue = DateTime.UtcNow >= _nextReconcile; }
+            if (reconcileDue) await Reconcile(dev, ct);
             return _store.Count(Upload.Pending) > 0 ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(2);
         }
 
@@ -766,11 +1017,7 @@ internal sealed class Engine : IDisposable
                     MarkOnline(true);
                     lock (_gate) { _lastSyncUtc = DateTime.UtcNow; }
                     _store.Set("sync.last", DateTime.UtcNow.ToString("O"));
-                    Log.Info($"Sent {m.File}: {m.Chests} chests ({r.Str("status")})");
-                    if (!m.Historical && r.Str("status") == "created" && _store.Flag("notify.synced"))
-                    {
-                        RaiseNotify("TOKENIFY", $"{m.Chests} CHESTS SYNCED TO TOKENIFY", once: false);
-                    }
+                    Log.Info($"Sent {m.File}: {m.ReplayCount(_settings.Tracking.CountDestroyed)} chests ({r.Str("status")})");
                     continue;
                 }
 
@@ -809,13 +1056,75 @@ internal sealed class Engine : IDisposable
         return TimeSpan.FromSeconds(1);
     }
 
+    /// <summary>Sends corrections and "leave this match out" choices made here, so the website shows the same count.</summary>
+    private async Task SendCorrections(Credentials.Device dev, CancellationToken ct)
+    {
+        lock (_gate) { if (_correctionsUnsupported) return; }
+        foreach (var m in _store.UnsyncedCorrections().Take(20))
+        {
+            if (!m.HasServerIdentity)
+            {
+                _store.MarkCorrectionSynced(m.Id);
+                continue;
+            }
+            var r = await _api.Call("tk_device_correct", new JsonObject
+            {
+                ["p_device"] = dev.Id.ToString(), ["p_secret"] = dev.Secret, ["p_player_hash"] = m.PlayerHash, ["p_match_key"] = m.MatchKey,
+                ["p_chests"] = m.Corrected, ["p_excluded"] = m.Excluded, ["p_reason"] = m.CorrectionReason,
+            }, ct);
+            if (r.Ok || r.Error == "not_found")
+            {
+                _store.MarkCorrectionSynced(m.Id);
+            }
+            else if (r.Error == "unsupported")
+            {
+                // The website's backend is older than this tracker: corrections stay here until it is updated.
+                lock (_gate) { _correctionsUnsupported = true; }
+                Log.Info("TOKENIFY does not accept corrections from the tracker yet; they are kept on this PC");
+                return;
+            }
+            else
+            {
+                if (HandleDeviceError(r)) return;
+                MarkOnline(!r.Network);
+                return;
+            }
+        }
+    }
+
+    /// <summary>Takes over corrections and exclusions made on the website, so both show the same count.</summary>
+    private async Task Reconcile(Credentials.Device dev, CancellationToken ct)
+    {
+        lock (_gate) { _nextReconcile = DateTime.UtcNow + ReconcileEvery; }
+        var r = await _api.Call("tk_device_matches", new JsonObject { ["p_device"] = dev.Id.ToString(), ["p_secret"] = dev.Secret, ["p_limit"] = 300 }, ct);
+        if (!r.Ok || r.Body?["matches"] is not JsonArray rows) return;
+        var countDestroyed = _settings.Tracking.CountDestroyed;
+        foreach (var row in rows)
+        {
+            if (ApiResult.Text(row?["match_key"]) is not { } key || _store.FindByKey(key) is not { } local) continue;
+            if (!local.CorrectionSynced) continue;   // a change made here is still on its way: it wins
+            var corrected = ApiResult.Bool(row?["corrected"]);
+            var serverCount = ApiResult.Int(row?["chests"]);
+            if (corrected && serverCount is int c && local.Corrected != c)
+            {
+                _store.Correct(local.Id, c, "changed on the website", "website", local.ReplayCount(countDestroyed));
+            }
+            else if (!corrected && local.Corrected is not null && local.CorrectionSource == "website")
+            {
+                _store.Correct(local.Id, null, "correction removed on the website", "website", local.ReplayCount(countDestroyed));
+            }
+            var excluded = ApiResult.Bool(row?["excluded"]);
+            if (excluded != local.Excluded) _store.SetExcludedFromServer(local.Id, excluded);
+        }
+    }
+
     /// <summary>Returns true (and stops syncing) when TOKENIFY no longer accepts this PC.</summary>
     private bool HandleDeviceError(ApiResult r)
     {
         if (r.Error is not ("device_revoked" or "device_unknown" or "unauthorized")) return false;
         lock (_gate) { _revoked = true; }
         Log.Warn("TOKENIFY no longer accepts this PC (" + r.Error + "); reconnect to keep syncing");
-        RaiseNotify("TOKENIFY Companion", "This PC was disconnected from TOKENIFY. Open the companion and reconnect to keep syncing.");
+        RaiseNotify("TOKENIFY", "This PC was disconnected from TOKENIFY. Open the tracker and reconnect to keep syncing.");
         return true;
     }
 
@@ -835,20 +1144,19 @@ internal sealed class Engine : IDisposable
                 Activity.Paused => "paused",
                 Activity.InMatch => "in_match",
                 Activity.Processing => "processing",
-                Activity.Syncing => "syncing",
                 Activity.NeedsAttention or Activity.FolderMissing => "needs_attention",
-                Activity.UpToDate => "up_to_date",
+                Activity.Ready => snap.Sync == SyncState.Syncing ? "syncing" : "up_to_date",
                 _ => "waiting",
             },
             ["folder"] = snap.Folder switch { FolderState.Ok => "ok", FolderState.Empty => "empty", FolderState.Missing => "missing", _ => "unreadable" },
             ["queued"] = snap.Queued,
             ["attention"] = snap.Attention.Count,
             ["parser"] = AppInfo.ParserVersion,
-            ["auto"] = !snap.Paused,
+            ["auto"] = !Paused,
         };
         if (last is not null)
         {
-            status["last_match_chests"] = last.ShownChests;
+            status["last_match_chests"] = last.Effective(_settings.Tracking.CountDestroyed);
             status["last_match_at"] = DateTimeOffset.FromUnixTimeMilliseconds(last.Ended).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture);
         }
 
@@ -865,16 +1173,15 @@ internal sealed class Engine : IDisposable
 
         MarkOnline(true);
         var username = ApiResult.Text(r.Body?["account"]?["username"]);
-        var tracking = r.Str("tracking") ?? "auto";
         _store.Set("account.username", username);
         _store.Set("device.name", r.Str("device_name"));
-        _store.Set("account.tracking", tracking);
         if (r.Str("rotate_secret") is { Length: >= 32 } next)
         {
             Credentials.Save(_store, dev.Id, next);   // the old secret stays valid until the new one is first used
             Log.Info("Device secret renewed");
         }
         SetSeasonStart(r.Str("season_start"));
+        _store.Set("squad.last", r.Body?["squad"] is JsonObject squad ? squad.ToJsonString() : null);
 
         var serverProfiles = (r.Body?["profiles"] as JsonArray)?.Select(p => ApiResult.Text(p?["player_hash"])).Where(h => h is not null).ToHashSet() ?? new();
         foreach (var p in _store.Profiles().Where(p => p.Decision == "mine"))
@@ -886,14 +1193,13 @@ internal sealed class Engine : IDisposable
         if (ApiResult.Bool(r.Body?["rescan"]))
         {
             Log.Info("Rescan requested from the website");
-            ScanNow();
+            Rescan();
         }
 
         lock (_gate)
         {
             _username = username;
             _deviceName = r.Str("device_name");
-            _tracking = tracking;
             _revoked = false;
             _statusDirty = false;
             _nextHello = DateTime.UtcNow + HelloEvery;
@@ -901,10 +1207,27 @@ internal sealed class Engine : IDisposable
         return true;
     }
 
-    private static JsonObject Payload(MatchRow m)
+    /// <summary>The summary sent for one match. Never the replay itself, and no Epic account id (only its one-way hash).</summary>
+    private JsonObject Payload(MatchRow m)
     {
-        var times = JsonNode.Parse(m.Times) as JsonArray ?? new JsonArray();
+        var countDestroyed = _settings.Tracking.CountDestroyed;
+        var count = m.ReplayCount(countDestroyed);
+        JsonArray times;
+        var full = _store.GetMatch(m.Id) ?? m;
+        var events = EventsOf(full).Where(e => e.Counted && (countDestroyed || e.Action != ChestAction.Destroyed)).ToList();
+        if (events.Count == count)
+        {
+            times = new JsonArray(events.Select(e => (JsonNode)Math.Round(e.Time, 1)).ToArray());
+        }
+        else
+        {
+            var all = JsonNode.Parse(m.Times) as JsonArray ?? new JsonArray();
+            times = new JsonArray(all.Take(count).Select(t => (JsonNode)(t?.GetValue<double>() ?? 0)).ToArray());
+            while (times.Count < count) times.Add(0);
+        }
+
         var breakdown = JsonNode.Parse(m.Breakdown) as JsonObject ?? new JsonObject();
+        if (!countDestroyed) breakdown.Remove("destroyed");
         return new JsonObject
         {
             ["player_hash"] = m.PlayerHash,
@@ -915,7 +1238,7 @@ internal sealed class Engine : IDisposable
             ["build"] = m.Build is { Length: > 80 } b ? b[..80] : m.Build,
             ["parser_version"] = m.Parser,
             ["registry_version"] = m.Registry,
-            ["chests"] = m.Chests,
+            ["chests"] = count,
             ["chest_times"] = times,
             ["breakdown"] = breakdown,
             ["historical"] = m.Historical,
@@ -942,39 +1265,72 @@ internal sealed class Engine : IDisposable
         try { Changed?.Invoke(Snapshot()); } catch { /* UI gone */ }
     }
 
-    public EngineSnapshot Snapshot()
+    /// <summary>The Fortnite account whose numbers are shown: the chosen one, or the one that played most recently.</summary>
+    private ProfileRow? ActiveProfile(List<ProfileRow> profiles, List<MatchRow> matches)
     {
+        var mine = profiles.Where(p => p.Decision == "mine").ToList();
+        if (mine.Count == 0) return null;
+        var chosen = _settings.Tracking.Profile;
+        if (chosen != "auto" && mine.FirstOrDefault(p => p.Hash == chosen) is { } fixedProfile) return fixedProfile;
+        var hashes = mine.Select(p => p.Hash).ToHashSet();
+        var lastHash = matches.LastOrDefault(m => hashes.Contains(m.PlayerHash))?.PlayerHash;
+        return mine.FirstOrDefault(p => p.Hash == lastHash) ?? mine[0];
+    }
+
+    /// <summary>The valid games of one Fortnite account, as the statistics need them.</summary>
+    public static List<GameStat> ValidGames(IEnumerable<MatchRow> matches, string? playerHash, Settings settings)
+    {
+        var from = settings.Tracking.StartDate;
+        return matches
+            .Where(m => m.PlayerHash == playerHash && m.Valid && (from is null || m.StartedLocal >= from.Value))
+            .Select(m => new GameStat(m.Id, m.StartedUtc, m.EndedUtc, m.Effective(settings.Tracking.CountDestroyed), m.Corrected is not null))
+            .ToList();
+    }
+
+    public TrackerSnapshot Snapshot()
+    {
+        var settings = _settings;
         var paired = Credentials.Load(_store) is not null;
-        bool paused = Paused, anyLive, processing, syncing, online, revoked;
+        bool paused = settings.Tracking.Paused, anyLive, processing, syncing, online, revoked, readerBroken;
         FolderState folder;
-        string folderPath, tracking;
-        int files;
+        string folderPath;
+        int files, taps;
+        long liveSince;
         string? username, deviceName;
         DateTime? lastSync;
         lock (_gate)
         {
-            anyLive = _anyLive; processing = _processing; syncing = _syncing; online = _online; revoked = _revoked;
+            anyLive = _anyLive; processing = _processing; syncing = _syncing; online = _online; revoked = _revoked; readerBroken = _readerBrokenAt != 0;
             folder = _folder; folderPath = _folderPath.Length > 0 ? _folderPath : ResolveFolder(); files = _replayFiles;
-            username = _username; deviceName = _deviceName; tracking = _tracking; lastSync = _lastSyncUtc;
+            username = _username; deviceName = _deviceName; lastSync = _lastSyncUtc; liveSince = _liveSince;
+            taps = anyLive ? _taps.Count(t => t >= liveSince - 60_000) : 0;
         }
         lastSync ??= DateTime.TryParse(_store.Get("sync.last"), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var ls) ? ls : null;
 
-        var queued = _store.Count(Upload.Pending);
+        var matches = _store.AllMatchesLight();
+        var profiles = _store.Profiles();
+        var active = ActiveProfile(profiles, matches);
+        var games = ValidGames(matches, active?.Hash, settings);
+        var stats = Stats.Compute(games, new StatsOptions(settings.Tracking.StartingTotal, settings.Tracking.SessionMode, settings.Tracking.SessionGapMinutes, anyLive),
+            DateTime.UtcNow, _store.Sessions());
+        var lastMatch = stats.LastGame is { } lg ? matches.FirstOrDefault(m => m.Id == lg.Id) : null;
+
+        var queued = paired ? matches.Count(m => m.Upload == Upload.Pending) : 0;
         var attention = new List<string>();
+        if (readerBroken) attention.Add("The tracker can't read replays right now: its program file was moved, renamed or blocked while it was running. Exit the tracker (tray menu) and start it again.");
         if (revoked) attention.Add("This PC was disconnected from TOKENIFY. Reconnect to keep syncing.");
         if (folder == FolderState.Missing) attention.Add("Fortnite's replay folder wasn't found. Turn on Settings → Game → Replays → Record Replays in Fortnite, or choose the folder.");
         if (folder == FolderState.Unreadable) attention.Add("The replay folder can't be read. Check its permissions or choose another folder.");
-        var profiles = _store.Profiles();
         var ask = profiles.FirstOrDefault(p => p.Decision == "ask");
         if (ask is not null) attention.Add($"Is the Fortnite account \"{ask.Name ?? "unknown"}\" yours? Its matches wait until you answer.");
         foreach (var c in profiles.Where(p => p.Error == "conflict")) attention.Add($"\"{c.Name ?? "A Fortnite account"}\" is linked to a different TOKENIFY account.");
-        var partial = _store.Count(Upload.HeldPartial);
-        if (partial > 0) attention.Add($"{partial} match{(partial == 1 ? "" : "es")} could only be read partly. Check them in Recent matches.");
-        var rejected = _store.Count(Upload.Rejected);
-        if (rejected > 0) attention.Add($"TOKENIFY refused {rejected} match{(rejected == 1 ? "" : "es")}. See Recent matches.");
+        var partial = matches.Count(m => m.Upload == Upload.HeldPartial && m.Corrected is null);
+        if (partial > 0) attention.Add($"{partial} match{(partial == 1 ? "" : "es")} could only be read partly and {(partial == 1 ? "is" : "are")} not counted yet. Check {(partial == 1 ? "it" : "them")} in Matches.");
+        var rejected = matches.Count(m => m.Upload == Upload.Rejected);
+        if (rejected > 0) attention.Add($"TOKENIFY refused {rejected} match{(rejected == 1 ? "" : "es")}. See Matches.");
         var fileRows = _store.Files();
         var unsupported = fileRows.Count(f => f.State == "unsupported");
-        if (unsupported > 0) attention.Add($"{unsupported} replay{(unsupported == 1 ? " uses" : "s use")} a Fortnite version this companion can't read yet. Update the companion.");
+        if (unsupported > 0) attention.Add($"{unsupported} replay{(unsupported == 1 ? " uses" : "s use")} a Fortnite version this tracker can't read yet. {(unsupported == 1 ? "It is" : "They are")} kept and not counted as zero. Update the tracker.");
         var held = fileRows.Count(f => f.State == "held");
         DateTime? hFrom = null, hTo = null;
         if (held > 0)
@@ -982,32 +1338,58 @@ internal sealed class Engine : IDisposable
             var dates = fileRows.Where(f => f.State == "held" && f.Started is not null).Select(f => DateTimeOffset.FromUnixTimeMilliseconds(f.Started!.Value).LocalDateTime).ToList();
             if (dates.Count > 0) { hFrom = dates.Min(); hTo = dates.Max(); }
         }
-        if (held > 0 && paired) attention.Add($"{held} older replay{(held == 1 ? " is" : "s are")} on this PC. Choose whether to import them (Status tab).");
+        if (held > 0 && settings.General.SetupDone) attention.Add($"{held} older replay{(held == 1 ? " is" : "s are")} on this PC. Choose whether to count {(held == 1 ? "it" : "them")} (Overview).");
+        // Everything above stops something from being counted or synced. What follows is only worth a look, so it
+        // is listed in the window but never puts a warning over the game.
+        var blocking = attention.Count;
+        var review = matches.Count(m => m.PlayerHash == active?.Hash && m.Ambiguous > 0 && !m.Reviewed && m.Corrected is null && m.Valid);
+        if (review > 0) attention.Add($"{review} match{(review == 1 ? " has" : "es have")} chests the replay could not attribute. They are not counted; review {(review == 1 ? "it" : "them")} in Matches.");
 
-        var lastMatch = _store.Matches(10).FirstOrDefault(m => m.Upload is Upload.Sent or Upload.Pending && !m.Historical);
         Activity activity;
         string status;
-        if (!paired) { activity = Activity.NotConnected; status = "Not connected"; }
-        else if (revoked) { activity = Activity.NeedsAttention; status = "Disconnected: reconnect"; }
-        else if (paused) { activity = Activity.Paused; status = "Automatic tracking paused"; }
-        else if (folder is FolderState.Missing or FolderState.Unreadable) { activity = Activity.FolderMissing; status = "Replays off / folder not found"; }
-        else if (processing) { activity = Activity.Processing; status = "Processing replay…"; }
-        else if (syncing) { activity = Activity.Syncing; status = "Syncing…"; }
-        else if (anyLive) { activity = Activity.InMatch; status = "Match in progress"; }
-        else if (attention.Count > 0) { activity = Activity.NeedsAttention; status = "Needs attention"; }
-        else if (queued > 0 && !online) { activity = Activity.Offline; status = $"{queued} match{(queued == 1 ? "" : "es")} waiting to sync"; }
-        else if (queued > 0) { activity = Activity.Syncing; status = $"{queued} match{(queued == 1 ? "" : "es")} waiting to sync"; }
-        else if (lastMatch is not null) { activity = Activity.UpToDate; status = "All matches synced"; }
-        else { activity = Activity.Waiting; status = "Waiting for a match"; }
+        if (paused) { activity = Activity.Paused; status = "TRACKING PAUSED"; }
+        else if (folder is FolderState.Missing or FolderState.Unreadable) { activity = Activity.FolderMissing; status = "REPLAYS NOT FOUND"; }
+        else if (processing) { activity = Activity.Processing; status = "READING REPLAY"; }
+        else if (anyLive) { activity = Activity.InMatch; status = "MATCH IN PROGRESS"; }
+        else if (blocking > 0) { activity = Activity.NeedsAttention; status = "NEEDS ATTENTION"; }
+        else if (stats.Games > 0) { activity = Activity.Ready; status = "READY"; }
+        else { activity = Activity.Waiting; status = "WAITING FOR A MATCH"; }
 
-        return new EngineSnapshot(paired, username, deviceName, tracking, paused, revoked, folderPath, folder, files, activity, status,
-            queued, attention, lastMatch, lastSync, online, held, hFrom, hTo, unsupported, ask,
-            fileRows.Count(f => f.State == "pre-season"), SeasonStartUtc);
+        SyncState sync;
+        string syncText;
+        if (!paired) { sync = SyncState.NotLinked; syncText = "Not linked to TOKENIFY"; }
+        else if (revoked) { sync = SyncState.Disconnected; syncText = "Disconnected: reconnect"; }
+        else if (syncing) { sync = SyncState.Syncing; syncText = "Syncing…"; }
+        else if (queued > 0 && !online) { sync = SyncState.Offline; syncText = $"Offline: {queued} match{(queued == 1 ? "" : "es")} waiting"; }
+        else if (queued > 0) { sync = SyncState.Queued; syncText = $"{queued} match{(queued == 1 ? "" : "es")} waiting to sync"; }
+        else if (!online) { sync = SyncState.Offline; syncText = "Offline"; }
+        else { sync = SyncState.UpToDate; syncText = "Synced with TOKENIFY"; }
+
+        return new TrackerSnapshot(settings, stats, activity, status, sync, syncText, paired, username, deviceName, online, folderPath, folder, files,
+            queued, attention, lastMatch, lastSync, held, hFrom, hTo, unsupported, ask, active,
+            fileRows.Count(f => f.State == "pre-season"), SeasonStartUtc, review, ReadSquad(), taps);
+    }
+
+    private SquadInfo? ReadSquad()
+    {
+        if (_store.Get("squad.last") is not { Length: > 0 } json) return null;
+        try
+        {
+            var o = JsonNode.Parse(json) as JsonObject;
+            if (o is null || ApiResult.Int(o["chests"]) is not int chests) return null;
+            DateTime? ended = DateTime.TryParse(ApiResult.Text(o["ended_at"]), CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var e) ? e : null;
+            return new SquadInfo(chests, ApiResult.Bool(o["complete"]), ApiResult.Int(o["members"]) ?? 0, ApiResult.Int(o["reported"]) ?? 0, ended);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     public void Dispose()
     {
         _cts.Cancel();
+        ReplayWorker.KillRunning();   // a read in progress is simply done again next time
         _scanThread?.Join(TimeSpan.FromSeconds(3));
         _syncThread?.Join(TimeSpan.FromSeconds(3));
         _watcher?.Dispose();

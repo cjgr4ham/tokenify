@@ -10,7 +10,7 @@ public static class ParserInfo
     /// replay: cached results from older versions are re-read (and re-sent; the server keeps the old value for
     /// audit and never overwrites a user's own correction).
     /// </summary>
-    public const string Version = "1.0.0";
+    public const string Version = "2.0.0";
 
     /// <summary>
     /// The identifier TOKENIFY stores for a Fortnite account: a SHA-256 of the Epic account id. The same on every

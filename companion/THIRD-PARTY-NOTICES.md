@@ -1,6 +1,6 @@
 # Third-party notices
 
-TOKENIFY Companion (GPL-3.0-or-later, see `LICENSE`) includes or is built with the following. Licence texts for
+TOKENIFY Chest Tracker, formerly TOKENIFY Companion (GPL-3.0-or-later, see `LICENSE`), includes or is built with the following. Licence texts for
 the MIT-licensed replay projects are in `lib/`.
 
 | Component | Use | Licence |
@@ -14,6 +14,7 @@ the MIT-licensed replay projects are in `lib/`.
 | [SQLite](https://sqlite.org) | database engine | Public domain |
 | [.NET runtime and Windows Forms](https://github.com/dotnet) 10 (bundled in the self-contained exe) | runtime | MIT, © .NET Foundation and contributors |
 | Microsoft.Extensions.Logging.Abstractions 10 | logging interfaces used by Unreal.Core | MIT, © .NET Foundation |
+| Bahnschrift (typeface) | overlay and window text | **not bundled**: it is part of Windows and is used from there |
 
 "Fortnite" and "Unreal Engine" are trademarks of Epic Games, Inc. This project is not affiliated with or endorsed by
 Epic Games.

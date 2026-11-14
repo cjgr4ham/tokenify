@@ -39,6 +39,8 @@ public sealed class ChestRegistry
     private Regex[] _exclude = [];
     private (string Kind, Regex Pattern, HashSet<string> Known)[] _kinds = [];
     private (string Kind, Regex Pattern)[] _others = [];
+    private (Regex Pattern, string? Label, bool Area)[] _weapons = [];
+    private readonly Dictionary<string, (string? Label, bool Area)> _weaponCache = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ContainerClass> _cache = new(StringComparer.Ordinal);
 
     public bool CountsUnknownChests => UnknownChestPolicy != "ignore";
@@ -75,6 +77,7 @@ public sealed class ChestRegistry
         reg._exclude = (doc.Exclude ?? []).Select(p => new Regex(p, opts)).ToArray();
         reg._kinds = (doc.Kinds ?? []).Select(k => (k.Kind, new Regex(k.Pattern, opts), new HashSet<string>(k.Known ?? [], StringComparer.OrdinalIgnoreCase))).ToArray();
         reg._others = (doc.OtherContainers ?? []).Select(k => (k.Kind, new Regex(k.Pattern, opts))).ToArray();
+        reg._weapons = (doc.Weapons ?? []).Select(w => (new Regex(w.Pattern, opts), w.Label, w.Area)).ToArray();
         return reg;
     }
 
@@ -125,6 +128,31 @@ public sealed class ChestRegistry
         return result;
     }
 
+    private (string? Label, bool Area) Weapon(string? className)
+    {
+        if (string.IsNullOrEmpty(className)) return (null, false);
+        lock (_weaponCache)
+        {
+            if (_weaponCache.TryGetValue(className, out var known)) return known;
+        }
+        var match = _weapons.FirstOrDefault(w => w.Pattern.IsMatch(className));
+        var result = match.Pattern is null ? ((string?)null, false) : (match.Label, match.Area);
+        lock (_weaponCache)
+        {
+            _weaponCache[className] = result;
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// A readable name for what a player holds: the registry's label when it has one, otherwise the game's
+    /// internal class name (shown as-is rather than guessed at). Null when nothing is held.
+    /// </summary>
+    public string? WeaponLabel(string? className) => string.IsNullOrEmpty(className) ? null : Weapon(className).Label ?? className;
+
+    /// <summary>Weapons and powers that can break several things, at range or through walls, in one use.</summary>
+    public bool IsAreaWeapon(string? className) => Weapon(className).Area;
+
     /// <summary>True when an opening of this class adds to the chest total.</summary>
     public bool Counts(ContainerClass c) => c.Role == ContainerRole.KnownChest || (c.Role == ContainerRole.UnknownChest && CountsUnknownChests);
 
@@ -136,6 +164,7 @@ public sealed class ChestRegistry
         public string[]? Exclude { get; set; }
         public KindDoc[]? Kinds { get; set; }
         public KindDoc[]? OtherContainers { get; set; }
+        public WeaponDoc[]? Weapons { get; set; }
         [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
     }
 
@@ -146,6 +175,13 @@ public sealed class ChestRegistry
         public float? StaleWindowSeconds { get; set; }
         public double? SameSpawnToleranceCm { get; set; }
         public string? UnknownChestPolicy { get; set; }
+    }
+
+    private sealed class WeaponDoc
+    {
+        public string Pattern { get; set; } = "$^";
+        public string? Label { get; set; }
+        public bool Area { get; set; }
     }
 
     private sealed class KindDoc

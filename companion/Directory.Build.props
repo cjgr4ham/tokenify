@@ -1,13 +1,15 @@
 <Project>
-  <!-- Shared settings for every TOKENIFY Companion project. -->
+  <!-- Shared settings for every TOKENIFY Chest Tracker project. -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <Deterministic>true</Deterministic>
+    <!-- One version for every project: the updater compares the running version with the one built into a download. -->
+    <Version>2.0.0</Version>
     <Company>TOKENIFY</Company>
-    <Copyright>TOKENIFY Companion contributors. GPL-3.0-or-later.</Copyright>
+    <Copyright>TOKENIFY Chest Tracker contributors. GPL-3.0-or-later.</Copyright>
     <!-- Reproducible builds: no machine paths in the binaries. -->
     <PathMap>$(MSBuildThisFileDirectory)=/tokenify-companion/</PathMap>
     <DebugType>embedded</DebugType>

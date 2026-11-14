@@ -1,12 +1,8 @@
-// TOKENIFY Companion - chest counting from Fortnite replays.
+// TOKENIFY Chest Tracker - chest counting from Fortnite replays.
 // Parts of this file are adapted from rossalv/fortnite-chest-counter (MIT, src/ChestReplayReader/ChestReader.cs:
-// hand-decoding of the few needed fields, chest identities, corrupt-block guard, decryption and decompression)
-// and from LED-N/Fortnite-ChestCounter (MIT, src/ChestCounter/ReplayAnalyzer.cs: opening rules, see
-// OpeningResolver). Licence texts are in companion/lib/.
-using System.Security.Cryptography;
-using Microsoft.Extensions.Logging.Abstractions;
+// hand-decoding of the few needed fields, chest identities) and from LED-N/Fortnite-ChestCounter (MIT,
+// src/ChestCounter/ReplayAnalyzer.cs: opening rules, see OpeningResolver). Licence texts are in companion/lib/.
 using Unreal.Core;
-using Unreal.Core.Attributes;
 using Unreal.Core.Contracts;
 using Unreal.Core.Exceptions;
 using Unreal.Core.Models;
@@ -15,25 +11,22 @@ using Unreal.Core.Models.Enums;
 namespace Tokenify.ReplayReader;
 
 /// <summary>
-/// The replay's spectator controller sends an extra NetPlayerIndex byte when its channel opens;
-/// Unreal.Core needs this marker to skip it.
-/// </summary>
-[PlayerController("BP_ReplayPC_Athena_C")]
-internal sealed class ReplayPlayerControllerMarker
-{
-}
-
-/// <summary>
-/// Reads one Fortnite .replay file and finds the chests opened by the player who recorded it.
+/// Reads one Fortnite .replay file and finds the chests opened or destroyed by the player who recorded it.
 ///
-/// Attribution: every searchable container replicates <c>SearchingPawn</c> (the pawn that searched it) next to
-/// <c>bAlreadySearched</c>. The game state replicates <c>RecorderPlayerState</c> and each player pawn replicates
-/// its <c>PlayerState</c>, so we know exactly which openings were made by the recording player's pawn(s).
-/// Only the handful of fields needed are decoded (minimal parse mode), which keeps a replay to about a second.
+/// Attribution: every searchable container replicates <c>SearchingPawn</c> (the pawn that searched or destroyed
+/// it) next to <c>bAlreadySearched</c> / <c>bDestroyed</c>. The game state replicates <c>RecorderPlayerState</c>
+/// and each player pawn replicates its <c>PlayerState</c>, so we know which interactions were made by the recording
+/// player's pawn(s). Only the handful of fields needed are decoded (minimal parse mode), which keeps a replay to
+/// about a second. What the camera was looking at plays no part: everything replicated to the recording client is
+/// read, whether or not it was ever on screen.
+///
+/// Besides the chests' own records, three more things are collected as supporting evidence (see
+/// <see cref="EvidenceAnalyzer"/>): damage cues that name a chest (who hit it, with what), what the recording
+/// player had in hand, and chests that vanished without any record. None of them can add a chest on its own.
 /// </summary>
-public sealed class ChestReader : ReplayReader<Replay>
+public sealed class ChestReader : FortniteReplayBase
 {
-    private enum GroupKind { Ignore, GameState, PlayerState, Pawn, ReplayController, Container }
+    private enum GroupKind { Ignore, GameState, PlayerState, Pawn, ReplayController, Container, Traced }
 
     private readonly ChestRegistry _registry;
     private readonly Dictionary<string, GroupKind> _kinds = new(StringComparer.Ordinal);
@@ -51,16 +44,48 @@ public sealed class ChestReader : ReplayReader<Replay>
     private readonly HashSet<uint> _playerStateChannels = new();
     private readonly Dictionary<uint, string> _dynamicChestIds = new();
     private readonly List<(string Class, double X, double Y, string Id)> _dynamicChests = new();
-    private int _rejectedBlocks;
+    private readonly Dictionary<uint, (float At, uint Actor)> _channelOpen = new();
+    private readonly Dictionary<uint, (string Key, string Class, bool Stable)> _containerChannels = new();
+    private readonly HashSet<uint> _tracedChannels = new();
+    private readonly Dictionary<string, bool> _extraGroups = new(StringComparer.Ordinal);
+    private readonly Dictionary<uint, string> _channelClass = new();
+    private readonly Dictionary<uint, float> _lastPositionAt = new();
+    private readonly HashSet<uint> _actorChannels = new();
+    private readonly Dictionary<string, bool> _capturedRpcs = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, NetFieldExportGroup?> _functionGroups = new(StringComparer.Ordinal);
+    private readonly NetBitReader _rpc = new();
     private int _decodedContainerUpdates;
+    private uint _currentChannel;
 
-    public ChestReader(ChestRegistry? registry = null) : base(NullLogger.Instance, ParseMode.Minimal)
+    // ---- supporting evidence (always collected; small) ----
+    private const string DamageCueFunction = "NetMulticast_Athena_BatchedDamageCues";
+    private const string AbilityCueFunction = "NetMulticast_InvokeGameplayCueExecuted_WithParams";
+    private readonly Dictionary<uint, uint> _actorArchetype = new();
+    private readonly List<(float Time, uint Pawn, uint Weapon)> _weaponChanges = new();
+    private readonly List<(float Time, uint Pawn, uint Target, uint Weapon, float Magnitude, bool Fatal)> _hits = new();
+    private readonly List<AbilityCue> _cues = new();
+    private readonly List<ContainerRemoval> _removals = new();
+    private readonly NetBitReader _cue = new();
+    private NetFieldExportGroup? _damageCueGroup;
+    private float _damageCueLookupAt = float.MinValue;
+    private readonly Dictionary<uint, string?> _resolvedClass = new();
+    private readonly Dictionary<uint, string?> _resolvedKey = new();
+    private bool _namesResolved;
+
+    /// <summary>What the last read collected, before classification (tests and diagnostics).</summary>
+    public ReplayObservations? LastObservations { get; private set; }
+
+    /// <summary>Extra recording for the audit viewer, diagnostics and research. Null = count only.</summary>
+    public TraceOptions? Trace { get; init; }
+
+    /// <summary>The trace of the last replay read (when <see cref="Trace"/> was set).</summary>
+    public ReplayTrace? LastTrace { get; private set; }
+
+    public ChestReader(ChestRegistry? registry = null)
     {
         _registry = registry ?? ChestRegistry.Default;
         _resolver = new OpeningResolver(_registry);
     }
-
-    private static float Now => CurrentTime;
 
     /// <summary>Scan one replay file. Never throws for bad or partial data; see <see cref="ScanResult.Status"/>.</summary>
     public ScanResult Read(string path)
@@ -95,7 +120,6 @@ public sealed class ChestReader : ReplayReader<Replay>
                 return result;
         }
 
-        Reset();
         byte[] data;
         try
         {
@@ -116,6 +140,7 @@ public sealed class ChestReader : ReplayReader<Replay>
     {
         Reset();
         result.RegistryVersion = _registry.Version;
+        var readFailed = false;
         try
         {
             using var archive = new Unreal.Core.BinaryReader(data.AsMemory());
@@ -127,22 +152,25 @@ public sealed class ChestReader : ReplayReader<Replay>
         {
             result.Status = ScanStatus.Corrupt;
             result.Error = ex.Message;
-            TryCleanup();
+            readFailed = true;
         }
         catch (Exception ex)
         {
             // Keep everything read so far, but never treat it as a final count.
             result.Status = ScanStatus.Partial;
             result.Error = ex.GetType().Name + ": " + ex.Message;
-            TryCleanup();
+            readFailed = true;
         }
 
+        // Names are looked up while the reader's caches still hold them; only then is a failed read cleaned up.
         FillMetadata(result);
         Resolve(result);
+        if (result.Status is ScanStatus.Corrupt or ScanStatus.Partial) TryCleanup();
 
         // A build newer than anything this parser knows that also failed to read is "unsupported", not "damaged":
-        // it is kept and retried automatically after a parser update.
-        if (result.Status is ScanStatus.Partial or ScanStatus.Corrupt && Replay?.Header is { } h
+        // it is kept and retried automatically after a parser update. A file that simply ends early was read
+        // correctly as far as it goes: that is a partial replay whatever its version.
+        if (readFailed && result.Status is ScanStatus.Partial or ScanStatus.Corrupt && Replay?.Header is { } h
             && (h.EngineNetworkVersion > EngineNetworkVersionHistory.LATEST || h.NetworkVersion > NetworkVersionHistory.LATEST))
         {
             result.Status = ScanStatus.Unsupported;
@@ -158,11 +186,6 @@ public sealed class ChestReader : ReplayReader<Replay>
         return result;
     }
 
-    private void TryCleanup()
-    {
-        try { Cleanup(); } catch { /* reader state is reset on the next read anyway */ }
-    }
-
     private void Reset()
     {
         _resolver = new OpeningResolver(_registry);
@@ -176,19 +199,28 @@ public sealed class ChestReader : ReplayReader<Replay>
         _playerStateChannels.Clear();
         _dynamicChestIds.Clear();
         _dynamicChests.Clear();
-        _rejectedBlocks = 0;
+        _channelOpen.Clear();
+        _containerChannels.Clear();
+        _tracedChannels.Clear();
+        _channelClass.Clear();
+        _lastPositionAt.Clear();
+        _actorChannels.Clear();
+        _functionGroups.Clear();
+        _actorArchetype.Clear();
+        _weaponChanges.Clear();
+        _hits.Clear();
+        _cues.Clear();
+        _removals.Clear();
+        _damageCueGroup = null;
+        _damageCueLookupAt = float.MinValue;
+        _resolvedClass.Clear();
+        _resolvedKey.Clear();
+        _namesResolved = false;
+        LastObservations = null;
+        RejectedCorruptBlocks = 0;
         _decodedContainerUpdates = 0;
         CurrentTime = 0;
-    }
-
-    /// <summary>Fortnite may keep the replay open while recording, so allow concurrent writers (read-only for us).</summary>
-    private static byte[] ReadShared(string path)
-    {
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        if (fs.Length > 1L << 30) throw new IOException("file is larger than any real replay");
-        var buffer = new byte[fs.Length];
-        fs.ReadExactly(buffer);
-        return buffer;
+        LastTrace = Trace is null ? null : new ReplayTrace();
     }
 
     private void FillMetadata(ScanResult result)
@@ -218,7 +250,7 @@ public sealed class ChestReader : ReplayReader<Replay>
         }
 
         result.MatchSessionId = CleanId(_sessionId);
-        result.CorruptBlocksSkipped = _rejectedBlocks;
+        result.CorruptBlocksSkipped = RejectedCorruptBlocks;
     }
 
     private static string? CleanId(string? id)
@@ -228,17 +260,28 @@ public sealed class ChestReader : ReplayReader<Replay>
         return id.Length is >= 8 and <= 64 && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_') ? id : null;
     }
 
+    /// <summary>Pawns of the recording player, of their teammates, and everyone's team (for labelling evidence).</summary>
+    public (HashSet<uint> Mine, HashSet<uint> Mates) Pawns()
+    {
+        var mine = new HashSet<uint>();
+        var mates = new HashSet<uint>();
+        var recorder = _recorderPlayerState ?? _controllerPlayerState;
+        if (recorder is not uint ps) return (mine, mates);
+        var myTeam = _playerTeam.TryGetValue(ps, out var t) ? t : (int?)null;
+        foreach (var (pawn, owner) in _pawnToPlayerState)
+        {
+            if (owner == ps) mine.Add(pawn);
+            else if (myTeam is int team && _playerTeam.TryGetValue(owner, out var ot) && ot == team) mates.Add(pawn);
+        }
+        return (mine, mates);
+    }
+
     private void Resolve(ScanResult result)
     {
         var recorder = _recorderPlayerState ?? _controllerPlayerState;
-        var myPawns = new HashSet<uint>();
+        var (myPawns, _) = Pawns();
         if (recorder is uint ps)
         {
-            foreach (var (pawn, owner) in _pawnToPlayerState)
-            {
-                if (owner == ps) myPawns.Add(pawn);
-            }
-
             if (_playerAccountId.TryGetValue(ps, out var id) && id.Length >= 16 && id != "NULL") result.RecorderAccountId = id.ToLowerInvariant();
             if (_playerName.TryGetValue(ps, out var name)) result.RecorderName = name;
             if (_playerTeam.TryGetValue(ps, out var team)) result.RecorderTeam = team;
@@ -246,40 +289,143 @@ public sealed class ChestReader : ReplayReader<Replay>
 
         result.RecorderFound = myPawns.Count > 0;
 
-        var unknown = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (var o in _resolver.Openings)
+        ResolveNames();
+        var observations = new ReplayObservations
         {
-            var cls = _registry.Classify(o.ClassPath);
-            if (_registry.Counts(cls) && (!o.Stale || o.StableKey) && o.Opener is > 0)
+            Openings = _resolver.Openings,
+            Removals = _removals.ToList(),
+            Hits = _hits.Select(h => (h, Key: KeyOf(h.Target))).Where(x => x.Key is not null)
+                .Select(x => new ContainerHit(x.h.Time, x.h.Pawn, x.Key!, ClassOfActor(x.h.Weapon), x.h.Magnitude, x.h.Fatal)).ToList(),
+            Weapons = _weaponChanges.Where(w => myPawns.Contains(w.Pawn)).Select(w => new WeaponChange(w.Time, w.Pawn, ClassOfActor(w.Weapon))).ToList(),
+            Cues = _cues.Where(c => myPawns.Contains(c.Pawn)).ToList(),
+            MyPawns = myPawns,
+        };
+        LastObservations = observations;
+
+        var report = EvidenceAnalyzer.Analyze(observations, _registry);
+        result.Events = report.Events;
+        result.Unobservable = report.Unobservable;
+        result.ChestsOpenedByAnyone = report.OpenedByAnyone;
+        result.OtherContainers = report.OtherContainers;
+        result.UnknownChestClasses = report.UnknownChestClasses.ToList();
+        result.Chests = report.Events.Where(e => e.Counted)
+            .Select(e => new ChestRecord(e.Time, e.Kind, e.ClassName, e.Action == ChestAction.Destroyed, e.Reopened, e.Unverified)).ToList();
+    }
+
+    /// <summary>
+    /// The library empties its name tables as soon as a replay has been read, so the few names the evidence needs
+    /// (weapons held, chests hit) are looked up just before that happens.
+    /// </summary>
+    protected override void Cleanup()
+    {
+        ResolveNames();
+        base.Cleanup();
+    }
+
+    private void ResolveNames()
+    {
+        if (_namesResolved) return;
+        _namesResolved = true;
+        foreach (var w in _weaponChanges) _resolvedClass.TryAdd(w.Weapon, LookupClass(w.Weapon));
+        foreach (var h in _hits)
+        {
+            _resolvedClass.TryAdd(h.Weapon, LookupClass(h.Weapon));
+            _resolvedKey.TryAdd(h.Target, LookupKey(h.Target));
+        }
+    }
+
+    private string? KeyOf(uint actor) => _resolvedKey.GetValueOrDefault(actor);
+
+    private string? ClassOfActor(uint actor) => _resolvedClass.GetValueOrDefault(actor);
+
+    /// <summary>The chest identity a network id refers to (map-placed: its path; spawned: class and position).</summary>
+    private string? LookupKey(uint actor)
+    {
+        if (actor == 0) return null;
+        if (_netGuidCache.TryGetPathName(actor, out var path) && !string.IsNullOrEmpty(path)) return path;
+        return _dynamicChestIds.TryGetValue(actor, out var id) ? id : null;
+    }
+
+    /// <summary>Short class name of a spawned actor (a weapon, usually), or null.</summary>
+    private string? LookupClass(uint actor)
+    {
+        if (actor == 0) return null;
+        if (_actorArchetype.TryGetValue(actor, out var archetype) && _netGuidCache.TryGetPathName(archetype, out var path) && !string.IsNullOrEmpty(path))
+        {
+            return ChestRegistry.ShortClassName(path);
+        }
+        return _netGuidCache.TryGetPathName(actor, out var own) && !string.IsNullOrEmpty(own) ? ChestRegistry.ShortClassName(own) : null;
+    }
+
+    private bool IsContainerActor(uint actor)
+    {
+        if (actor == 0) return false;
+        if (_dynamicChestIds.ContainsKey(actor)) return true;
+        if (_netGuidCache.TryGetPathName(actor, out var path) && !string.IsNullOrEmpty(path)) return _registry.Classify(path).Role != ContainerRole.None;
+        return _actorArchetype.TryGetValue(actor, out var archetype) && _netGuidCache.TryGetPathName(archetype, out var cls)
+            && !string.IsNullOrEmpty(cls) && _registry.Classify(cls).Role != ContainerRole.None;
+    }
+
+    /// <summary>
+    /// A damage cue is a remote call on the attacking character: what was hit, how hard, with which weapon. Its
+    /// parameters are sent like properties (handle, bit count, payload). Only cues that name a container are kept.
+    /// </summary>
+    private void ReadDamageCue(FBitArchive archive, int bits)
+    {
+        if (_damageCueGroup is null)
+        {
+            if (Now - _damageCueLookupAt < 1f) return;
+            _damageCueLookupAt = Now;
+            var suffix = ":" + DamageCueFunction;
+            _damageCueGroup = _netGuidCache.NetFieldExportGroupMap.FirstOrDefault(kv => kv.Key.EndsWith(suffix, StringComparison.Ordinal)).Value;
+            if (_damageCueGroup is null) return;
+        }
+        if (Channels[_currentChannel]?.ActorId is not uint pawn) return;
+
+        var group = _damageCueGroup;
+        _cue.FillBitsFrom(archive, bits);
+        _cue.EngineNetworkVersion = archive.EngineNetworkVersion;
+        uint hit = 0, other = 0, weapon = 0;
+        float magnitude = 0;
+        var fatal = false;
+        try
+        {
+            _cue.ReadBit(); // property checksum flag
+            for (var guard = 0; guard < 64 && !_cue.AtEnd() && !_cue.IsError; guard++)
             {
-                result.ChestsOpenedByAnyone++;
+                var handle = _cue.ReadIntPacked();
+                if (handle == 0) break;
+                handle--;
+                if (!group.IsValidIndex(handle)) return;
+                var numBits = (int)_cue.ReadIntPacked();
+                if (numBits == 0) continue;
+                if (_cue.IsError || numBits > _cue.GetBitsLeft()) return;
+                if (numBits > 64)
+                {
+                    _cue.SkipBits(numBits);
+                    continue;
+                }
+                var raw = _cue.ReadBitsToLong(numBits);
+                switch (group.NetFieldExports[handle]?.Name)
+                {
+                    case "HitActor": hit = PackedInt(raw, numBits) ?? 0; break;
+                    case "NonPlayerHitActor": other = PackedInt(raw, numBits) ?? 0; break;
+                    case "SourceWeapon": weapon = PackedInt(raw, numBits) ?? 0; break;
+                    case "Magnitude" when numBits == 32: magnitude = BitConverter.Int32BitsToSingle((int)raw); break;
+                    case "bIsFatal":
+                    case "NonPlayerbIsFatal":
+                        fatal |= (raw & 1) != 0;
+                        break;
+                }
             }
         }
-
-        foreach (var o in _resolver.OpenedBy(myPawns))
+        catch
         {
-            var cls = _registry.Classify(o.ClassPath);
-            var shortName = ChestRegistry.ShortClassName(o.ClassPath);
-            switch (cls.Role)
-            {
-                case ContainerRole.KnownChest:
-                    result.Chests.Add(new ChestRecord(o.Time, cls.Kind, shortName, o.Destroyed, o.Reopened, Unverified: false));
-                    break;
-                case ContainerRole.UnknownChest:
-                    unknown.Add(shortName);
-                    if (_registry.CountsUnknownChests)
-                    {
-                        result.Chests.Add(new ChestRecord(o.Time, cls.Kind, shortName, o.Destroyed, o.Reopened, Unverified: true));
-                    }
-                    break;
-                case ContainerRole.OtherContainer:
-                    result.OtherContainers[cls.Kind] = result.OtherContainers.GetValueOrDefault(cls.Kind) + 1;
-                    break;
-            }
+            return; // supporting evidence only: never let it affect the count
         }
 
-        result.UnknownChestClasses = unknown.ToList();
-        result.Chests.Sort((a, b) => a.Time.CompareTo(b.Time));
+        if (IsContainerActor(hit)) _hits.Add((Now, pawn, hit, weapon, magnitude, fatal));
+        if (other != hit && IsContainerActor(other)) _hits.Add((Now, pawn, other, weapon, magnitude, fatal));
     }
 
     // ------------------------------------------------------------------------------------------ decoding
@@ -305,10 +451,19 @@ public sealed class ChestReader : ReplayReader<Replay>
                 kind = GroupKind.PlayerState;
             else if (name.Contains("GameState", StringComparison.Ordinal) && !name.Contains("Component", StringComparison.Ordinal))
                 kind = GroupKind.GameState;
+            else if (Trace?.ExtraGroups?.IsMatch(path) == true)
+                kind = GroupKind.Traced;
         }
 
         _kinds[path] = kind;
         return kind;
+    }
+
+    private bool IsExtra(string path)
+    {
+        if (Trace?.ExtraGroups is not { } extra) return false;
+        if (!_extraGroups.TryGetValue(path, out var yes)) _extraGroups[path] = yes = extra.IsMatch(path);
+        return yes;
     }
 
     /// <summary>
@@ -355,6 +510,20 @@ public sealed class ChestReader : ReplayReader<Replay>
         return (id, !id.StartsWith('#'));
     }
 
+    private static uint? PackedInt(ulong raw, int bits)
+    {
+        if (bits is < 8 or > 40 || bits % 8 != 0) return null;
+        uint value = 0;
+        for (var shift = 0; shift < 35; shift += 7)
+        {
+            var b = (uint)(raw & 0xFF);
+            raw >>= 8;
+            value |= (b >> 1) << shift;
+            if ((b & 1) == 0) return value;
+        }
+        return null;
+    }
+
     /// <summary>
     /// Mirrors Unreal.Core's property reader (handle, bit count, payload) for the classes we care about, decoding
     /// only the fields we need and skipping the rest. See RepLayout.cpp ReceiveProperties_BackwardsCompatible.
@@ -365,6 +534,11 @@ public sealed class ChestReader : ReplayReader<Replay>
 #pragma warning restore CS8765
     {
         var kind = netDeltaUpdate ? GroupKind.Ignore : Classify(group.PathName);
+        if (Trace?.Census == true && !netDeltaUpdate)
+        {
+            LastTrace!.Census[group.PathName] = LastTrace.Census.GetValueOrDefault(group.PathName) + 1;
+        }
+
         if (kind == GroupKind.Ignore)
         {
             return base.ReceiveProperties(archive, group, channelIndex, out exportGroup, enablePropertyChecksum, netDeltaUpdate);
@@ -376,8 +550,16 @@ public sealed class ChestReader : ReplayReader<Replay>
 
         if (enablePropertyChecksum) archive.ReadBit();
 
-        uint? searchingPawn = null, playerState = null, recorderPlayerState = null, animCount = null;
-        bool? searched = null, destroyed = null;
+        var byActor = !netDeltaUpdate && _actorChannels.Contains(channelIndex);
+        if (byActor && kind == GroupKind.Ignore) kind = GroupKind.Traced;
+        var extra = kind == GroupKind.Traced || byActor || (Trace is not null && !netDeltaUpdate && IsExtra(group.PathName));
+        var tracing = Trace is not null && (extra || (kind == GroupKind.Container && Trace.Containers));
+        List<TraceField>? traced = tracing ? new List<TraceField>() : null;
+        var keepAll = kind == GroupKind.Container || byActor || Trace?.FieldFilter is null;
+
+        uint? searchingPawn = null, playerState = null, recorderPlayerState = null, animCount = null, heldWeapon = null;
+        bool? searched = null, destroyed = null, instant = null;
+        var damageContext = false;
         string? sessionId = null, netId = null;
         int? team = null;
 
@@ -393,28 +575,10 @@ public sealed class ChestReader : ReplayReader<Replay>
             if (numBits == 0) continue;
             if (archive.IsError || numBits > archive.GetBitsLeft()) return false;
 
+            var name = group.NetFieldExports[handle]?.Name;
             var start = archive.GetBitsLeft();
-            switch (kind, group.NetFieldExports[handle]?.Name)
+            switch (kind, name)
             {
-                case (GroupKind.Container, "SearchingPawn"):
-                    searchingPawn = archive.ReadIntPacked();
-                    break;
-                case (GroupKind.Container, "bAlreadySearched"):
-                    searched = archive.ReadBit();
-                    break;
-                case (GroupKind.Container, "bDestroyed"):
-                    destroyed = archive.ReadBit();
-                    break;
-                case (GroupKind.Container, "SearchAnimationCount") when numBits <= 32:
-                    animCount = (uint)archive.ReadBitsToInt(numBits);
-                    break;
-                case (GroupKind.Pawn, "PlayerState"):
-                case (GroupKind.ReplayController, "PlayerState"):
-                    playerState = archive.ReadIntPacked();
-                    break;
-                case (GroupKind.GameState, "RecorderPlayerState"):
-                    recorderPlayerState = archive.ReadIntPacked();
-                    break;
                 case (GroupKind.GameState, "GameSessionId"):
                     sessionId = ReadString(archive, numBits);
                     break;
@@ -422,26 +586,90 @@ public sealed class ChestReader : ReplayReader<Replay>
                 case (GroupKind.PlayerState, "UniqueID"):
                     netId = ReadNetId(archive, numBits);
                     break;
-                case (GroupKind.PlayerState, "TeamIndex") when numBits <= 32:
-                    team = archive.ReadBitsToInt(numBits);
+                case (GroupKind.Pawn, "ReplicatedMovement") when Trace?.Movement == true && channel.ActorId is uint mover:
+                    TracePosition(archive, numBits, mover);
+                    break;
+                default:
+                    var keep = traced is not null && (keepAll || (name is not null && Trace!.FieldFilter!.IsMatch(name)));
+                    if (numBits > 64)
+                    {
+                        if (kind == GroupKind.Container && name == "EffectContext") damageContext = true;
+                        if (keep && numBits <= 16384)
+                        {
+                            var bytes = archive.ReadBits(numBits).ToArray();
+                            traced!.Add(new TraceField(name ?? "?" + handle, numBits, 0, bytes, name == "EffectContext" ? DescribeEffectContext(bytes, numBits) : null));
+                        }
+                        break;
+                    }
+                    var raw = archive.ReadBitsToLong(numBits);
+                    if (keep) traced!.Add(new TraceField(name ?? "?" + handle, numBits, raw));
+                    switch (kind, name)
+                    {
+                        case (GroupKind.Container, "SearchingPawn"):
+                            searchingPawn = PackedInt(raw, numBits);
+                            break;
+                        case (GroupKind.Container, "bAlreadySearched"):
+                            searched = (raw & 1) != 0;
+                            break;
+                        case (GroupKind.Container, "bDestroyed"):
+                            destroyed = (raw & 1) != 0;
+                            break;
+                        case (GroupKind.Container, "bInstantDeath"):
+                            instant = (raw & 1) != 0;
+                            break;
+                        case (GroupKind.Container, "EffectContext"):
+                            damageContext = true;
+                            break;
+                        case (GroupKind.Pawn, "CurrentWeapon"):
+                            heldWeapon = PackedInt(raw, numBits);
+                            break;
+                        case (GroupKind.Container, "SearchAnimationCount") when numBits <= 32:
+                            animCount = (uint)raw;
+                            break;
+                        case (GroupKind.Pawn, "PlayerState"):
+                        case (GroupKind.ReplayController, "PlayerState"):
+                            playerState = PackedInt(raw, numBits);
+                            break;
+                        case (GroupKind.GameState, "RecorderPlayerState"):
+                            recorderPlayerState = PackedInt(raw, numBits);
+                            break;
+                        case (GroupKind.PlayerState, "TeamIndex") when numBits <= 32:
+                            team = (int)raw;
+                            break;
+                    }
                     break;
             }
 
             var consumed = start - archive.GetBitsLeft();
             if (consumed > numBits || archive.IsError) return false;
-            if (consumed < numBits) archive.SkipBits(numBits - consumed);
+            if (consumed < numBits)
+            {
+                archive.SkipBits(numBits - consumed);
+            }
         }
 
         switch (kind)
         {
-            case GroupKind.Container when channel.ActorId is uint actor
-                                          && (searchingPawn != null || searched != null || destroyed != null || animCount != null):
-                var (id, stable) = ChestId(actor, channel.Actor?.Location, group.PathName);
-                _decodedContainerUpdates++;
-                _resolver.Observe(new ContainerUpdate(Now, channelIndex, id, stable, group.PathName, searchingPawn, searched, destroyed, animCount));
+            case GroupKind.Container when channel.ActorId is uint actor:
+                if (!_containerChannels.TryGetValue(channelIndex, out var cc))
+                {
+                    var (id0, stable0) = ChestId(actor, channel.Actor?.Location, group.PathName);
+                    cc = (id0, group.PathName, stable0);
+                    _containerChannels[channelIndex] = cc;
+                    TraceOpen(channelIndex, actor, group.PathName, id0, channel.Actor?.Location);
+                }
+                if (searchingPawn != null || searched != null || destroyed != null || animCount != null)
+                {
+                    _decodedContainerUpdates++;
+                    _resolver.Observe(new ContainerUpdate(Now, channelIndex, cc.Key, cc.Stable, group.PathName, searchingPawn, searched, destroyed, animCount, instant, damageContext));
+                }
                 break;
-            case GroupKind.Pawn when playerState is > 0 && channel.ActorId is uint pawn:
-                _pawnToPlayerState[pawn] = playerState.Value;
+            case GroupKind.Traced when channel.ActorId is uint tactor:
+                if (_tracedChannels.Add(channelIndex)) TraceOpen(channelIndex, tactor, group.PathName, null, channel.Actor?.Location);
+                break;
+            case GroupKind.Pawn when channel.ActorId is uint pawn:
+                if (playerState is > 0) _pawnToPlayerState[pawn] = playerState.Value;
+                if (heldWeapon is uint held) _weaponChanges.Add((Now, pawn, held));
                 break;
             case GroupKind.ReplayController when playerState is > 0:
                 _controllerPlayerState ??= playerState;
@@ -457,7 +685,126 @@ public sealed class ChestReader : ReplayReader<Replay>
                 break;
         }
 
+        if (traced is { Count: > 0 } && channel.ActorId is uint a)
+        {
+            LastTrace!.Updates.Add(new TraceUpdate(Now, channelIndex, a, group.PathName, traced.ToArray()));
+            if (!LastTrace.GroupFields.ContainsKey(group.PathName))
+            {
+                LastTrace.GroupFields[group.PathName] = group.NetFieldExports.Where(e => e is not null).Select(e => e!.Name).ToArray();
+            }
+            NotePaths(traced);
+        }
+
         return true;
+    }
+
+    /// <summary>
+    /// Research: the start of a gameplay effect context names who caused the damage and with what. Layout (engine
+    /// GameplayEffectTypes.cpp): 1 bit "valid", 7 flag bits, then one object reference per set flag in the order
+    /// instigator, effect causer, ability, source object. The rest (hit result...) is not decoded.
+    /// </summary>
+    private string? DescribeEffectContext(byte[] data, int bits)
+    {
+        try
+        {
+            var r = new NetBitReader(data, bits);
+            if (!r.ReadBit()) return "empty";
+            var flags = r.ReadBitsToInt(7);
+            string[] names = { "instigator", "causer", "ability", "source" };
+            var parts = new List<string>();
+            for (var i = 0; i < 4; i++)
+            {
+                if ((flags & (1 << i)) == 0) continue;
+                var guid = r.ReadIntPacked();
+                if (r.IsError) return null;
+                var label = _netGuidCache.TryGetPathName(guid, out var p) && !string.IsNullOrEmpty(p) ? p
+                    : LastTrace is not null && LastTrace.Paths.TryGetValue(guid, out var a) ? a : "";
+                parts.Add($"{names[i]}=#{guid}{(label.Length > 0 ? ":" + ChestRegistry.ShortClassName(label) : "")}");
+            }
+            return $"flags=0x{flags:X2} " + string.Join(" ", parts);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private void TracePosition(FBitArchive archive, int numBits, uint actor)
+    {
+        if (LastTrace is null || (_lastPositionAt.TryGetValue(actor, out var last) && Now - last < 1f)) return;
+        _field.FillBitsFrom(archive, numBits);
+        _field.EngineNetworkVersion = archive.EngineNetworkVersion;
+        try
+        {
+            var m = _field.SerializeRepMovement();
+            if (_field.IsError || m.Location is not { } l) return;
+            _lastPositionAt[actor] = Now;
+            LastTrace.Positions.Add(new TracePosition(Now, actor, l.X, l.Y, l.Z));
+        }
+        catch
+        {
+            // research only
+        }
+    }
+
+    private void NotePaths(List<TraceField> fields)
+    {
+        foreach (var f in fields)
+        {
+            if (f.AsNetGuid() is uint g && g > 0 && !LastTrace!.Paths.ContainsKey(g) && _netGuidCache.TryGetPathName(g, out var p)) LastTrace.Paths[g] = p;
+        }
+    }
+
+    /// <summary>
+    /// Research: decode the parameters of one remote call. They are sent like properties (handle, bit count,
+    /// payload) against the export group named "Class:Function".
+    /// </summary>
+    private void CaptureRpc(FBitArchive archive, int bits, string function)
+    {
+        if (!_functionGroups.TryGetValue(function, out var group))
+        {
+            var suffix = ":" + function;
+            group = _netGuidCache.NetFieldExportGroupMap.FirstOrDefault(kv => kv.Key.EndsWith(suffix, StringComparison.Ordinal)).Value;
+            if (group is not null) _functionGroups[function] = group; // not cached while unknown: it may be exported later
+        }
+        if (group is null || Channels[_currentChannel]?.ActorId is not uint actor) return;
+
+        _rpc.FillBitsFrom(archive, bits);
+        _rpc.EngineNetworkVersion = archive.EngineNetworkVersion;
+        var fields = new List<TraceField>();
+        try
+        {
+            _rpc.ReadBit(); // property checksum flag
+            while (!_rpc.AtEnd() && !_rpc.IsError && fields.Count < 256)
+            {
+                var handle = _rpc.ReadIntPacked();
+                if (handle == 0) break;
+                handle--;
+                if (!group.IsValidIndex(handle)) break;
+                var numBits = (int)_rpc.ReadIntPacked();
+                if (numBits == 0) continue;
+                if (_rpc.IsError || numBits > _rpc.GetBitsLeft()) break;
+                var name = group.NetFieldExports[handle]?.Name ?? "?" + handle;
+                if (numBits <= 64) fields.Add(new TraceField(name, numBits, _rpc.ReadBitsToLong(numBits)));
+                else fields.Add(new TraceField(name, numBits, 0, _rpc.ReadBits(numBits).ToArray()));
+            }
+        }
+        catch
+        {
+            // research only
+        }
+
+        if (fields.Count == 0) return;
+        NotePaths(fields);
+        LastTrace!.Updates.Add(new TraceUpdate(Now, _currentChannel, actor, group.PathName, fields.ToArray()));
+    }
+
+    private void TraceOpen(uint channelIndex, uint actor, string cls, string? key, FVector? loc)
+    {
+        if (LastTrace is null) return;
+        _tracedChannels.Add(channelIndex);
+        var at = _channelOpen.TryGetValue(channelIndex, out var o) ? o.At : Now;
+        LastTrace.Channels.Add(new TraceChannelEvent(at, channelIndex, actor, "open", null, cls, key, loc?.X, loc?.Y, loc?.Z));
     }
 
     private string? ReadString(FBitArchive archive, int numBits)
@@ -528,169 +875,145 @@ public sealed class ChestReader : ReplayReader<Replay>
     protected override void OnChannelOpened(uint channelIndex, NetworkGUID? actor)
     {
         base.OnChannelOpened(channelIndex, actor);
+        _channelOpen[channelIndex] = (Now, actor?.Value ?? 0);
+        _containerChannels.Remove(channelIndex);
+        _tracedChannels.Remove(channelIndex);
+        _channelClass.Remove(channelIndex);
+        _actorChannels.Remove(channelIndex);
         _resolver.ChannelOpened(channelIndex, Now);
+        if (actor?.Value is uint spawned && spawned != 0 && Channels[channelIndex]?.ArchetypeId is uint spawnedFrom && spawnedFrom != 0)
+        {
+            _actorArchetype[spawned] = spawnedFrom;
+        }
+
+        if (LastTrace is not null && actor?.Value is uint id && id != 0)
+        {
+            var channel = Channels[channelIndex];
+            // Map-placed actors are known by their own path; spawned ones by the class they were spawned from.
+            if (_netGuidCache.TryGetPathName(id, out var own) && !string.IsNullOrEmpty(own))
+            {
+                _channelClass[channelIndex] = own;
+                if (Trace!.Actors?.IsMatch(own) == true)
+                {
+                    _actorChannels.Add(channelIndex);
+                    _tracedChannels.Add(channelIndex);
+                    LastTrace.Paths[id] = own;
+                    LastTrace.Channels.Add(new TraceChannelEvent(Now, channelIndex, id, "open", null, own, own, null, null, null));
+                }
+            }
+            else if (channel?.ArchetypeId is uint arch && _netGuidCache.TryGetPathName(arch, out var archetype) && !string.IsNullOrEmpty(archetype))
+            {
+                _channelClass[channelIndex] = archetype;
+                LastTrace.Paths[id] = archetype;
+                if (Trace!.Census) LastTrace.SpawnCensus[archetype] = LastTrace.SpawnCensus.GetValueOrDefault(archetype) + 1;
+                if (Trace.Spawns?.IsMatch(archetype) == true && channel?.Actor?.Location is { } at)
+                {
+                    LastTrace.Spawns.Add(new TraceSpawn(Now, channelIndex, id, archetype, at.X, at.Y, at.Z));
+                }
+            }
+        }
     }
-
-    protected override void OnChannelClosed(uint channelIndex, NetworkGUID? actor)
-    {
-        base.OnChannelClosed(channelIndex, actor);
-        _resolver.ChannelClosed(channelIndex);
-        _playerStateChannels.Remove(channelIndex);
-    }
-
-    // ------------------------------------------------------------------- robustness against bad data
-
-    /// <summary>Real Fortnite classes have at most a few thousand replicated fields.</summary>
-    private const uint MaxExportsPerGroup = 1 << 16;
 
     /// <summary>
-    /// A few replays contain a corrupt export block whose string length reads as ~1 billion characters.
-    /// Unreal.Core would allocate a buffer that size before the read fails. Walk the block first, checking every
-    /// length against the data actually left; if one is impossible, drop the packet without the giant allocation.
+    /// The library clears the channel before reporting a close, so the close (and why: destroyed, out of range,
+    /// dormant...) is captured here, after the bunch's last property updates have been read.
     /// </summary>
-    public override void ReceiveNetFieldExportsCompat(FBitArchive bitArchive)
+    public override bool ReceivedSequencedBunch(DataBunch bunch)
     {
-        bitArchive.Mark();
-        var impossible = HasImpossibleLength(bitArchive);
-        bitArchive.Pop();
-
-        if (impossible)
+        var closing = bunch.bClose;
+        var reason = bunch.CloseReason;
+        var index = bunch.ChIndex;
+        var actor = Channels[index]?.ActorId ?? 0;
+        var result = base.ReceivedSequencedBunch(bunch);
+        if (closing)
         {
-            _rejectedBlocks++;
-            throw new InvalidDataException("Corrupt net field export block (impossible length).");
-        }
-
-        base.ReceiveNetFieldExportsCompat(bitArchive);
-    }
-
-    private static bool HasImpossibleLength(FBitArchive a)
-    {
-        var version = a.EngineNetworkVersion;
-        if (a.GetBitsLeft() < 32) return false;
-        var count = a.ReadUInt32();
-
-        for (var i = 0; i < count; i++)
-        {
-            if (a.GetBitsLeft() < 48) return false;
-            a.ReadIntPacked();
-            if (a.ReadBit())
+            if (_containerChannels.Remove(index, out var cc))
             {
-                if (SkipFString(a) is not { } ok) return false;
-                if (!ok) return true;
-                if (a.GetBitsLeft() < 32) return false;
-                if (a.ReadUInt32() > MaxExportsPerGroup) return true;
-            }
-
-            if (a.GetBitsLeft() < 1) return false;
-            if (!a.ReadBit()) continue;
-            if (a.GetBitsLeft() < 72) return false;
-            a.ReadIntPacked();
-            a.ReadUInt32();
-
-            if (version < EngineNetworkVersionHistory.HISTORY_NETEXPORT_SERIALIZE_FIX)
-            {
-                var strings = version < EngineNetworkVersionHistory.HISTORY_NETEXPORT_SERIALIZATION ? 2 : 1;
-                for (var s = 0; s < strings; s++)
+                var touched = _resolver.ChannelClosed(index);
+                // A map-placed chest that was seen closed and then stops existing, with no opened or destroyed
+                // state in between. (Spawned chests do this whenever they go out of range: not recorded.)
+                if (!touched && reason == ChannelCloseReason.Destroyed && actor != 0 && _netGuidCache.TryGetPathName(actor, out var placed) && !string.IsNullOrEmpty(placed))
                 {
-                    if (SkipFString(a) is not { } ok) return false;
-                    if (!ok) return true;
+                    _removals.Add(new ContainerRemoval(Now, cc.Key, cc.Class, SeenIntact: true));
                 }
+                LastTrace?.Channels.Add(new TraceChannelEvent(Now, index, actor, "close", reason.ToString(), cc.Class, cc.Key, null, null, null));
             }
-            else
+            else if (reason == ChannelCloseReason.Destroyed && _channelOpen.TryGetValue(index, out var bare) && bare.Actor != 0
+                && _netGuidCache.TryGetPathName(bare.Actor, out var gone) && !string.IsNullOrEmpty(gone) && _registry.Classify(gone).Role != ContainerRole.None)
             {
-                if (a.GetBitsLeft() < 1) return false;
-                if (a.ReadBit())
-                {
-                    if (a.GetBitsLeft() < 40) return false;
-                    if (version < EngineNetworkVersionHistory.HISTORY_CHANNEL_NAMES) a.ReadUInt32(); else a.ReadIntPacked();
-                }
-                else
-                {
-                    if (SkipFString(a) is not { } ok) return false;
-                    if (!ok) return true;
-                    if (a.GetBitsLeft() < 32) return false;
-                    a.ReadInt32();
-                }
+                // The replay only says this map-placed container no longer exists: no state was ever sent for it.
+                _removals.Add(new ContainerRemoval(Now, gone, gone, SeenIntact: false));
+            }
+            else if (_tracedChannels.Contains(index))
+            {
+                var closedActor = actor != 0 ? actor : _channelOpen.TryGetValue(index, out var co) ? co.Actor : 0;
+                LastTrace?.Channels.Add(new TraceChannelEvent(Now, index, closedActor, "close", reason.ToString(), _channelClass.GetValueOrDefault(index), null, null, null, null));
+            }
+            else if (LastTrace is not null && Trace!.Containers && _channelClass.TryGetValue(index, out var bareClass)
+                && _registry.Classify(bareClass).Role != ContainerRole.None && _channelOpen.TryGetValue(index, out var opened))
+            {
+                // A container whose channel opened and closed without any state: on its own this says nothing
+                // about who (if anyone) opened it. Recorded so that such cases can be measured.
+                LastTrace.Channels.Add(new TraceChannelEvent(opened.At, index, opened.Actor, "open", null, bareClass, bareClass, null, null, null, Bare: true));
+                LastTrace.Channels.Add(new TraceChannelEvent(Now, index, opened.Actor, "close", reason.ToString(), bareClass, bareClass, null, null, null, Bare: true));
+            }
+            _channelClass.Remove(index);
+            _tracedChannels.Remove(index);
+            _playerStateChannels.Remove(index);
+            _channelOpen.Remove(index);
+        }
+        return result;
+    }
+
+    public override bool ReceivedReplicatorBunch(DataBunch bunch, FBitArchive archive, uint? repObject, bool bHasRepLayout)
+    {
+        _currentChannel = bunch.ChIndex;
+        return base.ReceivedReplicatorBunch(bunch, archive, repObject, bHasRepLayout);
+    }
+
+    /// <summary>Research: which RPCs / custom fields fire on traced channels (names and sizes only).</summary>
+    public override bool ReadFieldHeaderAndPayload(FBitArchive archive, NetFieldExportGroup group, out NetFieldExport? outField, out uint? payload)
+    {
+        var ok = base.ReadFieldHeaderAndPayload(archive, group, out outField, out payload);
+        if (ok && outField is not null && payload is uint size && size > 0)
+        {
+            if (outField.Name == DamageCueFunction)
+            {
+                archive.Mark();
+                try { ReadDamageCue(archive, (int)size); }
+                finally { archive.Pop(); }
+            }
+            else if (outField.Name == AbilityCueFunction && Channels[_currentChannel]?.ActorId is uint cuePawn
+                && group.PathName.Contains("PlayerPawn", StringComparison.Ordinal))
+            {
+                _cues.Add(new AbilityCue(Now, cuePawn));
             }
         }
-
-        return false;
-    }
-
-    /// <summary>true = skipped a valid string, false = impossible length, null = ran out of data.</summary>
-    private static bool? SkipFString(FBitArchive a)
-    {
-        if (a.GetBitsLeft() < 32) return null;
-        long length = a.ReadInt32();
-        var bits = (length < 0 ? -2 * length : length) * 8;
-        if (bits > a.GetBitsLeft()) return false;
-        a.SkipBits((int)bits);
-        return true;
-    }
-
-    // ------------------------------------------------------------------------- callbacks we don't use
-
-    protected override void OnExportRead(uint channelIndex, INetFieldExportGroup? exportGroup)
-    {
-    }
-
-    protected override void OnNetDeltaRead(uint channelIndex, NetDeltaUpdate update)
-    {
-    }
-
-    /// <summary>Events (kill feed, match stats, ...) aren't needed; skip them without decrypting.</summary>
-    public override void ReadEvent(FArchive archive)
-    {
-        archive.ReadFString(); // id
-        archive.ReadFString(); // group
-        archive.ReadFString(); // metadata
-        archive.ReadUInt32();  // start time
-        archive.ReadUInt32();  // end time
-        archive.SkipBytes(archive.ReadInt32());
-    }
-
-    protected override FArchive DecryptBuffer(FArchive archive, int size)
-    {
-        if (!Replay.Info.IsEncrypted)
+        if (ok && outField is not null && Trace?.RpcCensus == true)
         {
-            return new Unreal.Core.BinaryReader(archive.ReadMemory(size))
-            {
-                EngineNetworkVersion = Replay.Header.EngineNetworkVersion,
-                NetworkVersion = Replay.Header.NetworkVersion,
-                ReplayHeaderFlags = Replay.Header.Flags,
-                ReplayVersion = Replay.Info.FileVersion,
-            };
+            var key = group.PathName + "." + outField.Name;
+            LastTrace!.RpcCensus[key] = LastTrace.RpcCensus.GetValueOrDefault(key) + 1;
         }
-
-        using var aes = Aes.Create();
-        aes.Key = Replay.Info.EncryptionKey.ToArray();
-        var decrypted = aes.DecryptEcb(archive.ReadMemory(size).Span, PaddingMode.PKCS7);
-
-        return new Unreal.Core.BinaryReader(decrypted.AsMemory())
+        if (ok && outField is not null && payload is uint bits && bits > 0 && Trace?.RpcCapture is { } capture && LastTrace is not null)
         {
-            EngineNetworkVersion = archive.EngineNetworkVersion,
-            NetworkVersion = archive.NetworkVersion,
-            ReplayHeaderFlags = archive.ReplayHeaderFlags,
-            ReplayVersion = archive.ReplayVersion,
-        };
+            var key = group.PathName + "." + outField.Name;
+            if (!_capturedRpcs.TryGetValue(key, out var wanted)) _capturedRpcs[key] = wanted = capture.IsMatch(key);
+            if (wanted)
+            {
+                archive.Mark();
+                try { CaptureRpc(archive, (int)bits, outField.Name); }
+                finally { archive.Pop(); }
+            }
+        }
+        if (ok && LastTrace is not null && outField is not null && _tracedChannels.Contains(_currentChannel))
+        {
+            LastTrace.Rpcs.Add(new TraceRpc(Now, _currentChannel, group.PathName, outField.Name, (int)(payload ?? 0)));
+        }
+        return ok;
     }
 
-    protected override FArchive Decompress(FArchive archive)
+    protected override void OnNetGuidExported(uint netGuid, string pathName)
     {
-        if (!Replay.Info.IsCompressed) return archive;
-
-        var decompressedSize = archive.ReadInt32();
-        var compressedSize = archive.ReadInt32();
-        if (decompressedSize < 0 || compressedSize < 0 || decompressedSize > 256 << 20) throw new InvalidDataException("impossible chunk size");
-        var compressed = archive.ReadBytes(compressedSize);
-        var output = Unreal.Encryption.Oodle.DecompressReplayData(compressed, decompressedSize);
-
-        return new Unreal.Core.BinaryReader(output)
-        {
-            EngineNetworkVersion = archive.EngineNetworkVersion,
-            NetworkVersion = archive.NetworkVersion,
-            ReplayHeaderFlags = archive.ReplayHeaderFlags,
-            ReplayVersion = archive.ReplayVersion,
-        };
+        if (Trace?.Keywords?.IsMatch(pathName) == true) LastTrace!.KeywordPaths.Add(pathName);
     }
 }

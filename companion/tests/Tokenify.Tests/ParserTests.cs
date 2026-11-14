@@ -28,12 +28,37 @@ public static partial class Tests
         yield return ("registry short class names", ShortNames);
         yield return ("player hash is stable and case-insensitive", PlayerHashStable);
 
+        // ---- evidence rules (pure logic) and the safety scan ----
+        foreach (var test in EvidenceTests()) yield return test;
+
+        // ---- statistics, sessions, database, corrections, exports, and the tracker on real replays ----
+        foreach (var test in CoreTests()) yield return test;
+
+        // ---- the overlay: where it is placed and what is drawn ----
+        foreach (var test in OverlayTests()) yield return test;
+
         // ---- header checks ----
         yield return ("recording replay (live, no key) is not ready", HeaderRecording);
         yield return ("finished replay with a zeroed key is not ready", HeaderZeroKey);
         yield return ("newer replay file version is unsupported", HeaderUnsupported);
         yield return ("random bytes are corrupt", HeaderCorrupt);
         yield return ("empty file is corrupt, never zero chests", EmptyFile);
+
+        // ---- replays of the current season (kept outside the repository: they contain other players) ----
+        var current = Environment.GetEnvironmentVariable("TOKENIFY_REPLAY_CURRENT");
+        var currentExpected = Path.Combine(AppContext.BaseDirectory, "fixtures-expected-current.json");
+        if (string.IsNullOrEmpty(current) || !Directory.Exists(current) || !File.Exists(currentExpected))
+        {
+            yield return ("current-season replays", () => throw new SkipException("set TOKENIFY_REPLAY_CURRENT to a folder of replays (see tests/fixtures/README.md)"));
+        }
+        else
+        {
+            foreach (var e in CurrentExpectations.Load(currentExpected))
+            {
+                var file = Path.Combine(current, e.File);
+                yield return ($"current {e.File}: {e.Chests} chests ({e.Searched} searched, {e.Destroyed} destroyed), {e.Ambiguous} ambiguous", () => CurrentMatches(file, e));
+            }
+        }
 
         // ---- real replay fixtures ----
         if (string.IsNullOrEmpty(fixtures) || !Directory.Exists(fixtures))
@@ -57,6 +82,33 @@ public static partial class Tests
         yield return ("truncated replay is never reported as complete", () => Truncated(c5));
         yield return ("damaged bytes mid-file never inflate the count", () => Damaged(c5));
         yield return ("replays from two players have different identities", () => TwoRecorders(fixtures));
+    }
+
+    private sealed class CurrentExpectations
+    {
+        public string File { get; set; } = "";
+        public int Chests { get; set; }
+        public int Searched { get; set; }
+        public int Destroyed { get; set; }
+        public int Ambiguous { get; set; }
+        public string? Note { get; set; }
+
+        public static List<CurrentExpectations> Load(string path) => System.Text.Json.JsonSerializer.Deserialize<List<CurrentExpectations>>(
+            System.IO.File.ReadAllText(path), new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+    }
+
+    private static void CurrentMatches(string file, CurrentExpectations e)
+    {
+        if (!File.Exists(file)) throw new SkipException("replay not present");
+        var r = new ChestReader().Read(file);
+        Eq(ScanStatus.Complete, r.Status, "status");
+        Eq(e.Chests, r.ChestsOpened, "chests");
+        Eq(e.Searched, r.Searched, "searched");
+        Eq(e.Destroyed, r.Destroyed, "destroyed");
+        Eq(e.Ambiguous, r.Ambiguous, "ambiguous (never counted)");
+        Eq(r.ChestsOpened, r.Events.Count(x => x.Counted), "counted events match the total");
+        True(r.Events.Where(x => x.Counted).All(x => x.Evidence is Evidence.Confirmed or Evidence.Corroborated), "only confirmed or corroborated events are counted");
+        True(r.Events.Where(x => x.Evidence == Evidence.Ambiguous).All(x => !x.Counted && x.Reason is not null), "ambiguous events carry a reason and are not counted");
     }
 
     // ------------------------------------------------------------------------------ helpers

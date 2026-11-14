@@ -66,8 +66,22 @@ public sealed class ScanResult
     public int? RecorderTeam { get; set; }
 
     // ---- chests ----
+    /// <summary>The counted chests (confirmed or corroborated), one per opening.</summary>
     public List<ChestRecord> Chests { get; set; } = new();
     public int ChestsOpened => Chests.Count;
+
+    /// <summary>Every chest interaction found, with its evidence: the counted ones and the ambiguous ones.</summary>
+    public List<ChestEvent> Events { get; set; } = new();
+    /// <summary>Counted chests that were opened (by hand or by a hit).</summary>
+    public int Searched => Events.Count(e => e.Counted && e.Action == ChestAction.Searched);
+    /// <summary>Counted chests that were broken so their loot spilled.</summary>
+    public int Destroyed => Events.Count(e => e.Counted && e.Action == ChestAction.Destroyed);
+    public int Confirmed => Events.Count(e => e.Counted && e.Evidence == Evidence.Confirmed);
+    public int Corroborated => Events.Count(e => e.Counted && e.Evidence == Evidence.Corroborated);
+    /// <summary>Interactions the replay cannot attribute. Never part of the total; shown for review.</summary>
+    public int Ambiguous => Events.Count(e => e.Evidence == Evidence.Ambiguous);
+    /// <summary>Chests that vanished with no record of who or why, unrelated to the player's actions.</summary>
+    public int Unobservable { get; set; }
     /// <summary>Chest openings by anyone in view (you, teammates, opponents): a plausibility check only.</summary>
     public int ChestsOpenedByAnyone { get; set; }
     /// <summary>Ammo boxes and other containers the recording player opened (never counted as chests).</summary>

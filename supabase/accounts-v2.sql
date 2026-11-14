@@ -2002,6 +2002,28 @@ language sql stable security definer set search_path = '' as $$
   from c
 $$;
 
+-- The party total of a player's most recent squad game (last 24 hours), for the Windows tracker's optional
+-- "squad" line. Only chests that are really known are added up: linked players' own counts and teammates
+-- entered as exact numbers, never estimates. "complete" says whether that covers every player of the game.
+create or replace function tkp.squad_last(p_account uuid) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare v_game uuid; j jsonb;
+begin
+  select g.id into v_game from public.tk_party_games g
+    join public.tk_party_game_members gm on gm.game_id = g.id and gm.account_id = p_account
+   where g.status = 'ended' and not g.void and g.ended_at > now() - interval '24 hours'
+   order by g.ended_at desc limit 1;
+  if v_game is null then return null; end if;
+  j := tkp.game_json(v_game, p_account);
+  return jsonb_build_object(
+    'chests', (j ->> 'known_total')::integer + (j ->> 'reported_total')::integer,
+    'complete', (j ->> 'completeness') in ('complete', 'reported'),
+    'members', (j ->> 'linked_count')::integer + jsonb_array_length(j -> 'teammates'),
+    'reported', (select count(*) from jsonb_array_elements(j -> 'members') m where jsonb_typeof(m -> 'chests') = 'number')
+              + (select count(*) from jsonb_array_elements(j -> 'teammates') t where t ->> 'mode' = 'exact'),
+    'ended_at', j -> 'ended_at');
+end $$;
+
 create or replace function public.tk_party_history(p_limit integer default 20) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare me uuid := tkp.require_account();
@@ -2074,6 +2096,7 @@ begin
     'profiles', (select coalesce(jsonb_agg(jsonb_build_object('player_hash', p.player_hash, 'label', p.label) order by p.created_at), '[]'::jsonb)
                    from public.tk_replay_profiles p where p.account_id = d.account_id),
     'season_start', tkp.season_start(),
+    'squad', tkp.squad_last(d.account_id),
     'server_time', now());
 end $$;
 
@@ -2180,6 +2203,50 @@ begin
            order by x.started_at desc)
       from (select * from public.tk_replay_matches r where r.account_id = g.account_id
              order by r.started_at desc limit least(greatest(coalesce(p_limit, 50), 1), 500)) x), '[]'::jsonb));
+end $$;
+
+-- A correction, or "leave this match out", made in the Windows tracker, so the website shows the same count.
+-- Same rules as the website's own tk_replay_correct / tk_replay_exclude: the replay's number stays on record,
+-- a newer parser never overwrites a correction, and p_chests = null removes it. Sending the same thing twice
+-- changes nothing.
+create or replace function public.tk_device_correct(p_device uuid, p_secret text, p_player_hash text, p_match_key text,
+  p_chests integer default null, p_excluded boolean default null, p_reason text default null) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare g record; r record; v_key text := lower(coalesce(p_match_key, '')); v_excluded boolean; v_changed boolean := false;
+begin
+  select * into g from tkp.device_gate(p_device, p_secret, 'devcorrect', 120, interval '1 hour');
+  if g.err is not null then return g.err; end if;
+  if p_chests is not null and (p_chests < 0 or p_chests > 400) then return jsonb_build_object('ok', false, 'error', 'invalid_count'); end if;
+  if v_key !~ '^(fn|rg):[a-z0-9_-]{8,64}$' or coalesce(p_player_hash, '') !~ '^[0-9a-f]{64}$' then
+    return jsonb_build_object('ok', false, 'error', 'invalid');
+  end if;
+  select * into r from public.tk_replay_matches x
+   where x.account_id = g.account_id and x.match_key = v_key and x.player_hash = p_player_hash for update;
+  if r.id is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  v_excluded := coalesce(p_excluded, r.excluded);
+
+  if r.corrected_chests is distinct from p_chests then
+    update public.tk_replay_matches set corrected_chests = p_chests,
+           correction_reason = case when p_chests is null then null else tkp.clean_label(p_reason, 120) end,
+           corrected_at = case when p_chests is null then null else now() end, updated_at = now(),
+           revisions = tkp.revisions_push(revisions, jsonb_build_object('at', now(),
+             'kind', case when p_chests is null then 'correction_cleared' else 'correction' end, 'source', 'tracker',
+             'before', coalesce(r.corrected_chests, r.chests), 'after', coalesce(p_chests, r.chests), 'reason', tkp.clean_label(p_reason, 120)))
+     where id = r.id;
+    v_changed := true;
+  end if;
+  if r.excluded is distinct from v_excluded then
+    update public.tk_replay_matches set excluded = v_excluded, updated_at = now(),
+           revisions = tkp.revisions_push(revisions, jsonb_build_object('at', now(),
+             'kind', case when v_excluded then 'excluded' else 'included' end, 'source', 'tracker'))
+     where id = r.id;
+    v_changed := true;
+  end if;
+  if v_changed then
+    if v_excluded then perform tkp.replay_unlink_party(r.id, null); else perform tkp.replay_attach_party(r.id); end if;
+    perform tkp.bump_account(g.account_id);
+  end if;
+  return jsonb_build_object('ok', true, 'status', case when v_changed then 'updated' else 'unchanged' end, 'match', tkp.replay_json(r.id));
 end $$;
 
 -- "Disconnect" from the companion itself.
@@ -2484,6 +2551,7 @@ grant execute on function public.tk_device_hello(uuid, text, jsonb, text) to ano
 grant execute on function public.tk_device_profile_claim(uuid, text, text, text) to anon;
 grant execute on function public.tk_device_import(uuid, text, jsonb) to anon;
 grant execute on function public.tk_device_matches(uuid, text, integer) to anon;
+grant execute on function public.tk_device_correct(uuid, text, text, text, integer, boolean, text) to anon;
 grant execute on function public.tk_device_disconnect(uuid, text) to anon;
 
 -- ------------------------------------------------------------------------------ retire v1 (email)

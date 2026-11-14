@@ -7,9 +7,47 @@ public static class Program
 {
     public static int Main(string[] args)
     {
+        // Tests never touch a real install: logs, settings and exports go to a throwaway folder.
+        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("TOKENIFY_DATA")))
+        {
+            Environment.SetEnvironmentVariable("TOKENIFY_DATA", Path.Combine(Path.GetTempPath(), "tokenify-tests", "data-" + Environment.ProcessId));
+        }
+
         if (args.Length >= 2 && args[0] == "scan")
         {
             return Scan(args[1], args.Contains("-v"));
+        }
+
+        if (args.Length >= 2 && args[0] == "probe")
+        {
+            Console.OutputEncoding = System.Text.Encoding.UTF8;
+            return Forensics.Run(args[1], args);
+        }
+
+        if (args.Length >= 1 && args[0] == "render")
+        {
+            return RenderSamples.Run(args.Length >= 2 ? args[1] : Path.Combine(Path.GetTempPath(), "tokenify-tests", "render"));
+        }
+
+        // Release tooling: the private key never goes into the repository.
+        if (args.Length >= 2 && args[0] == "keygen")
+        {
+            if (File.Exists(args[1])) { Console.Error.WriteLine("refusing to overwrite an existing key: " + args[1]); return 1; }
+            var (pem, pub) = Tokenify.Core.Updater.NewKey();
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(args[1]))!);
+            File.WriteAllText(args[1], pem);
+            Console.WriteLine(pub);
+            return 0;
+        }
+
+        if (args.Length >= 3 && args[0] == "sign")
+        {
+            var signature = Tokenify.Core.Updater.Sign(args[1], File.ReadAllText(args[2]));
+            File.WriteAllText(args[1] + ".sig", signature);
+            Console.WriteLine(Tokenify.Core.Updater.Verify(args[1], signature)
+                ? "signed and verified against the key built into the app: " + args[1] + ".sig"
+                : "SIGNED, BUT IT DOES NOT MATCH THE KEY BUILT INTO THE APP");
+            return 0;
         }
 
         if (args.Length >= 1 && args[0] == "test")

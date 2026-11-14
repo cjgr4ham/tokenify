@@ -643,6 +643,7 @@ await section('replay imports: inferred sessions, history, offline catch-up, exc
 
 await section('mixed squad: one Switch player counting by hand + three PCs on replays', async () => {
   // Sam (Switch 2, manual) leads; Bea, Cal and Dee play on PC with the companion
+  eq((await dev(deePc, 'tk_device_hello')).squad, null, 'no squad game yet: the tracker is told no squad total');
   await call(sam, 'tk_party_create');
   const code = (await call(sam, 'tk_party_code_create')).code;
   for (const p of [bea, cal, dee]) ok((await call(p, 'tk_party_join_code', { p_code: code })).ok, 'joined by code');
@@ -668,6 +669,8 @@ await section('mixed squad: one Switch player counting by hand + three PCs on re
   eq(rb.match.party.link, 'time-window', 'first replay tied to the squad game by membership + time');
   g = (await call(sam, 'tk_party_state')).party.last_game;
   eq([g.known_total, g.pending_count], [80, 2], '80 known chests, 2 players pending');
+  let sq = (await dev(beaPc, 'tk_device_hello')).squad;
+  eq([sq.chests, sq.complete, sq.members, sq.reported], [80, false, 4, 2], "the tracker's squad line: 80 so far, 2 of 4 counted, not final");
   const rc = await dev(calPc, 'tk_device_import', { p_match: matchPayload({ hash: calHash, chests: 35, session: match, start: start + 5e3, end }) });
   const rd = await dev(deePc, 'tk_device_import', { p_match: matchPayload({ hash: deeHash, chests: 47, session: match, start: start + 9e3, end }) });
   ok(rc.match.party.link === 'match-id' && rd.match.party.link === 'match-id', 'teammates tied by the shared Fortnite match id');
@@ -682,6 +685,9 @@ await section('mixed squad: one Switch player counting by hand + three PCs on re
   const sig = (await sql(`select version from tk_party_signals where party_id = $1`, [g.party_id]))[0].version;
   await call(dee, 'tk_replay_correct', { p_match: rd.match.id, p_chests: 48, p_reason: 'missed one' });
   eq((await call(sam, 'tk_party_state')).party.last_game.known_total, 163, 'correction updates the squad total');
+  sq = (await dev(calPc, 'tk_device_hello')).squad;
+  eq([sq.chests, sq.complete, sq.members, sq.reported], [163, true, 4, 4], "every member's tracker gets the final squad total");
+  ok(Math.abs(Date.parse(sq.ended_at) - Date.now()) < 10 * MIN, 'with the time the squad game ended');
   ok((await sql(`select version from tk_party_signals where party_id = $1`, [g.party_id]))[0].version > sig, 'and pushes a live update');
   const hist = await call(sam, 'tk_party_history', {});
   eq([hist.stats.linked.games, hist.stats.linked.chests], [1, 163], 'linked squad stats use replay counts');
@@ -744,6 +750,34 @@ await section('squad replays: hybrid, missing, conflicts, manual linking', async
   await call(sam, 'tk_party_game_end', { p_game: g2.id });
   const hist = await dev(deePc, 'tk_device_import', { p_match: matchPayload({ hash: deeHash, chests: 3, historical: true, start: Date.now() - 20 * MIN, end: Date.now() - MIN }) });
   eq(hist.match.party, null, 'back-filled history is never added to squad games');
+});
+
+await section('corrections made in the Windows tracker reach the website', async () => {
+  await call(cal, 'tk_tracking_settings', { p_mode: 'auto' });
+  const start = Date.now() - 1300 * MIN;
+  const m = (await dev(calPc, 'tk_device_import', { p_match: matchPayload({ hash: calHash, chests: 20, start, end: start + 15 * MIN }) })).match;
+  const key = m.match_key;
+  const c1 = await dev(calPc, 'tk_device_correct', { p_player_hash: calHash, p_match_key: key, p_chests: 23, p_excluded: false, p_reason: 'three behind a wall' });
+  ok(c1.ok && c1.status === 'updated', 'the tracker can correct a count');
+  eq([c1.match.chests, c1.match.replay_chests, c1.match.corrected_chests, c1.match.correction_reason], [23, 20, 23, 'three behind a wall'], "the replay's own count stays on record next to the correction");
+  eq((await call(cal, 'tk_replay_matches', {})).matches.find((x) => x.id === m.id).chests, 23, 'the website shows the corrected count');
+  eq((await dev(calPc, 'tk_device_correct', { p_player_hash: calHash, p_match_key: key, p_chests: 23, p_excluded: false, p_reason: 'three behind a wall' })).status, 'unchanged', 'sending it again changes nothing');
+  eq((await dev(calPc, 'tk_device_matches')).matches.find((x) => x.match_key === key).corrected, true, 'the tracker reads it back as corrected');
+  // a newer parser must not undo the player's correction
+  const again = await dev(calPc, 'tk_device_import', { p_match: { ...matchPayload({ hash: calHash, chests: 21, start, end: start + 15 * MIN, parser: '2.0.0' }), session_id: key.slice(3) } });
+  eq([again.status, again.match.chests, again.match.replay_chests], ['updated_kept_correction', 23, 21], 'a re-read replay updates the replay count and keeps the correction');
+  const ex = await dev(calPc, 'tk_device_correct', { p_player_hash: calHash, p_match_key: key.toUpperCase(), p_chests: 23, p_excluded: true });
+  ok(ex.ok && ex.match.excluded, '"leave this match out" from the tracker (match ids are not case sensitive)');
+  const back = await dev(calPc, 'tk_device_correct', { p_player_hash: calHash, p_match_key: key, p_chests: null, p_excluded: false });
+  eq([back.match.excluded, back.match.corrected_chests, back.match.chests], [false, null, 21], 'removing the correction and putting the match back');
+  eq((await dev(calPc, 'tk_device_correct', { p_player_hash: calHash, p_match_key: key, p_chests: 401 })).error, 'invalid_count', 'count limits');
+  eq((await dev(calPc, 'tk_device_correct', { p_player_hash: calHash, p_match_key: 'fn:nosuchmatch0000', p_chests: 1 })).error, 'not_found', 'unknown match');
+  eq((await dev(calPc, 'tk_device_correct', { p_player_hash: calHash, p_match_key: "fn:x'; drop table tk_accounts;--", p_chests: 1 })).error, 'invalid', 'malformed match id refused');
+  eq((await dev(beaPc, 'tk_device_correct', { p_player_hash: calHash, p_match_key: key, p_chests: 1 })).error, 'not_found', "another player's tracker cannot change it");
+  eq((await call(beaPc.who, 'tk_device_correct', { p_device: calPc.id, p_secret: 'x'.repeat(43), p_player_hash: calHash, p_match_key: key, p_chests: 1 })).error, 'device_unknown', 'and not without the device secret');
+  eq((await call(cal, 'tk_device_correct', { p_device: calPc.id, p_secret: 'x'.repeat(43), p_player_hash: calHash, p_match_key: key, p_chests: 1 })).error, 'device_unknown', "being signed in as the owner is no substitute for the PC's secret");
+  await sql(`delete from tk_replay_matches where id = $1`, [m.id]);
+  await call(cal, 'tk_tracking_settings', { p_mode: 'manual' });
 });
 
 await section('companion disconnect and housekeeping', async () => {

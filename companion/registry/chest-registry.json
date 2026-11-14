@@ -1,13 +1,20 @@
 {
-  "version": 1,
-  "updated": "2026-11-09",
+  "version": 2,
+  "updated": "2026-11-12",
   "notes": [
     "Which replicated Fortnite classes count as a TOKENIFY chest, and how openings are counted.",
     "A class is a chest candidate when its name contains 'chest' and it replicates the container fields",
     "(bAlreadySearched / SearchingPawn). Patterns are case-insensitive regular expressions matched against the",
     "class name without its path and without the trailing _C.",
-    "Bump 'version' whenever a rule changes: the companion re-reads affected replays and the server keeps the",
-    "previous result for audit. A user's own correction is never overwritten by a re-read."
+    "Bump 'version' whenever a rule changes: the tracker re-reads affected replays and the server keeps the",
+    "previous result for audit. A user's own correction is never overwritten by a re-read.",
+    "v2 (Fortnite 43.00): 'weapons' names what a player holds and marks the ones that can break several things",
+    "in one use ('area'). Area weapons never add chests by themselves: they only decide whether a chest that",
+    "vanished without any record is listed for review (ambiguous) or just counted as unobservable.",
+    "'TackyGoofiness' is the game's internal name for the stretching fruit power (abilities: stretch launch,",
+    "rocket, grab, falling kick), which players call the Gum-Gum Fruit. A weapon without a label is shown by its",
+    "internal name rather than a guessed one.",
+    "v2 also stops 'hammock' matching the ammo rule and plain cannons matching the loot cannon rule."
   ],
   "counting": {
     "countDestroyed": true,
@@ -34,14 +41,21 @@
   ],
   "kinds": [
     { "kind": "rare", "label": "Rare chest", "pattern": "rarechest|rare_chest|legendary", "known": ["AlwaysSpawn_RareChest", "Tiered_Chest_Rare"] },
-    { "kind": "buried", "label": "Buried chest", "pattern": "buried", "known": ["Tiered_Chest_Buried"] },
-    { "kind": "poster", "label": "Sprite poster chest", "pattern": "spriteposter|booty", "known": [] },
+    { "kind": "buried", "label": "Buried chest", "pattern": "buried", "known": ["Tiered_Chest_Buried", "B_Athena_BuriedChest_Chest"] },
+    { "kind": "poster", "label": "Sprite poster chest", "pattern": "spriteposter|booty", "known": ["B_SpritePosters_Booty_Chest"] },
     { "kind": "relic", "label": "Sprite vault chest", "pattern": "relic|extraction", "known": ["B_TieredChest_Relics"] },
-    { "kind": "regular", "label": "Chest", "pattern": "tiered_chest|tieredchest|normalchest|standardchest", "known": ["Tiered_Chest_Athena", "Tiered_Chest_Apollo_IceBox", "Tiered_Chest_Sunflower"] }
+    { "kind": "regular", "label": "Chest", "pattern": "tiered_chest|tieredchest|normalchest|standardchest", "known": ["Tiered_Chest_Athena", "AlwaysSpawn_NormalChest", "Tiered_Chest_Apollo_IceBox", "Tiered_Chest_Sunflower"] }
   ],
   "otherContainers": [
-    { "kind": "ammo", "label": "Ammo box", "pattern": "ammo" },
+    { "kind": "ammo", "label": "Ammo box", "pattern": "(^|_)ammo(_|box|$)|ammobox" },
     { "kind": "food", "label": "Food box", "pattern": "food_?box|cooler" },
-    { "kind": "cannon", "label": "Loot cannon", "pattern": "cannon" }
+    { "kind": "cannon", "label": "Loot cannon", "pattern": "loot_?cannon" }
+  ],
+  "weapons": [
+    { "pattern": "TackyGoofiness", "label": "Gum-Gum Fruit", "area": true },
+    { "pattern": "EnteringWobble", "area": true },
+    { "pattern": "GraftedCrunchy", "area": true },
+    { "pattern": "Pickaxe", "label": "pickaxe", "area": false },
+    { "pattern": "Grenade|Launcher|PurpleDrool|CannonBall|Rocket", "label": "explosive", "area": true }
   ]
 }

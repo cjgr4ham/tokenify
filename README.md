@@ -110,20 +110,24 @@ server immediately.
 
 ## Automatic PC tracking (Windows)
 
-PC players don't have to press anything: **TOKENIFY Companion** (`companion/`, a small Windows app) reads the replay
-Fortnite saves after each match and adds the chests you opened to your account a few seconds after the match ends.
-Switch and console players keep counting on the website, and everyone can be in the same party.
+PC players don't have to press anything: **TOKENIFY Chest Tracker** (`companion/`, a small Windows app; version 1 was
+called TOKENIFY Companion) reads the replay Fortnite saves after each match, counts the chests you opened and the
+ones you destroyed, shows your total and chests per game on a small in-game overlay, and adds them to your account
+a few seconds after the match ends. Switch and console players keep counting on the website, and everyone can be in
+the same party.
 
-- **Set up once:** turn on *Record Replays* in Fortnite, download the companion from **Settings → Automatic PC
+- **Set up once:** turn on *Record Replays* in Fortnite, download the tracker from **Settings → Automatic PC
   tracking**, press **LINK DEVICE** and type the code into the app. Linked PCs are listed there (rename, rescan,
   disconnect), with the import history.
 - **How your chests are counted:** *By hand*, *Automatically* (replays are the count) or *Both* (count by hand, and
   after each match the replay checks it: Manual 35 · Replay 37 · +2, you choose). A match is never added on top of a
   game you counted by hand.
 - Imported matches become normal games, so totals, CPG, Last 10 and token chances just work. Matches recorded while
-  no session runs are grouped into an *automatic session* whose time is the matches' own length.
-- **Corrections:** fix an imported count in Import history; the replay's number is kept for audit and a newer
-  companion never overwrites your correction. *Not my match* removes one everywhere.
+  no session runs are grouped into an *automatic session* whose time is the matches' own length. On automatic
+  tracking the Live Counter's big number is the newest of those sessions (it says so), not a bare 0.
+- **Corrections:** fix an imported count in Import history or in the tracker itself (they travel both ways); the
+  replay's number is kept for audit and a re-read replay never overwrites your correction. *Not my match* removes
+  one everywhere.
 - **Squads:** each PC player's replay result is tied to the squad game by Fortnite's shared match id. Until it
   arrives they show as *Awaiting replay* (never 0), and the total reads "85 known chests · 2 players pending".
 - **Only this season counts** (since Nov 1, 2026): the Pirate Token didn't exist before, so older matches are refused.
@@ -170,8 +174,8 @@ WebAssembly), so everything can be tested with throwaway accounts that never tou
 ```
 cd dev
 npm install
-node test-backend.mjs        # 353 backend checks: accounts, sessions, recovery, friends, blocking, PC pairing, imports,
-                             # parties, squad games, idempotent chests, teammates, permissions
+node test-backend.mjs        # 371 backend checks: accounts, sessions, recovery, friends, blocking, PC pairing, imports,
+                             # corrections from the PC, parties, squad games, idempotent chests, teammates, permissions
 node local-supabase.mjs      # local stand-in for the Supabase APIs + the site on :8090
 ```
 

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Everything the tracker knows and does that is not drawing: the local database, statistics, sessions,
+    replay monitoring, website sync, exports and updates. No window code lives here, so all of it is tested
+    without a screen.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>Tokenify.Core</AssemblyName>
+    <RootNamespace>Tokenify.Core</RootNamespace>
+    <Product>TOKENIFY Chest Tracker</Product>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.14" />
+    <!-- SQLite native library: 2.1.11 and older bundle a SQLite with a known vulnerability (GHSA-2m69-gcr7-jv3q). -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.14" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Tokenify.ReplayReader\Tokenify.ReplayReader.csproj" />
+  </ItemGroup>
+
+</Project>
